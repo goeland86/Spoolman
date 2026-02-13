@@ -395,5 +395,40 @@
         "new_location": "New Location",
         "no_location": "No Location",
         "no_locations_help": "This page lets you organize your spools in locations, add some spools to get started!"
+    },
+    "external": {
+        "source_spoolmandb": "SpoolmanDB",
+        "source_tigertag": "TigerTag"
+    },
+    "nfc": {
+        "scan_title": "NFC Tag Scanner",
+        "scan_description": "Scan an NFC tag to view details about the spool.",
+        "encode_button": "Encode to NFC",
+        "encode_title": "Encode Spool to NFC Tag",
+        "write_success": "Tag written successfully!",
+        "write_error": "Failed to write tag.",
+        "no_match": "No matching spool found for this tag.",
+        "create_from_tag": "Create Spool from Tag",
+        "mode_browser": "Browser",
+        "mode_server": "Server",
+        "unsupported": "NFC is not supported in this browser.",
+        "place_tag": "Place NTAG213 tag on reader...",
+        "reading": "Reading tag...",
+        "writing": "Writing tag...",
+        "user_message": "User Message",
+        "user_message_help": "Optional message (max 28 characters)",
+        "preview_title": "Data Preview",
+        "status": {
+            "connected": "Connected",
+            "disconnected": "Disconnected",
+            "disabled": "Disabled"
+        },
+        "error": {
+            "no_reader": "No NFC reader detected.",
+            "read_failed": "Failed to read tag.",
+            "write_failed": "Failed to write tag.",
+            "not_supported": "Web NFC is not supported in this browser. Use the Server mode with a connected reader.",
+            "permission_denied": "NFC permission denied."
+        }
     }
 }

@@ -1,9 +1,10 @@
-import { InboxOutlined, PrinterOutlined, ToTopOutlined, ToolOutlined } from "@ant-design/icons";
+import { InboxOutlined, PrinterOutlined, ToTopOutlined, ToolOutlined, WifiOutlined } from "@ant-design/icons";
 import { DateField, NumberField, Show, TextField } from "@refinedev/antd";
 import { useInvalidate, useShow, useTranslate } from "@refinedev/core";
 import { Button, Modal, Typography } from "antd";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
+import React, { useState } from "react";
 import { ExtraFieldDisplay } from "../../components/extraFields";
 import { NumberFieldUnit } from "../../components/numberField";
 import SpoolIcon from "../../components/spoolIcon";
@@ -11,6 +12,8 @@ import { enrichText } from "../../utils/parsing";
 import { EntityType, useGetFields } from "../../utils/queryFields";
 import { useCurrencyFormatter } from "../../utils/settings";
 import { getBasePath } from "../../utils/url";
+import { isWebNfcSupported, useNfcStatus } from "../../utils/nfc";
+import NfcWriteModal from "../../components/nfcWriteModal";
 import { IFilament } from "../filaments/model";
 import { setSpoolArchived, useSpoolAdjustModal } from "./functions";
 import { ISpool } from "./model";
@@ -40,6 +43,12 @@ export const SpoolShow = () => {
     }
     return currencyFormatter.format(price);
   };
+
+  // NFC state
+  const [nfcWriteModalVisible, setNfcWriteModalVisible] = useState(false);
+  const nfcStatus = useNfcStatus();
+  const showNfcButton =
+    (nfcStatus.data?.enabled === true && nfcStatus.data?.status === "connected") || isWebNfcSupported();
 
   // Provides the function to open the spool adjustment modal and the modal component itself
   const { openSpoolAdjustModal, spoolAdjustModal } = useSpoolAdjustModal();
@@ -133,6 +142,15 @@ export const SpoolShow = () => {
           >
             {t("printing.qrcode.button")}
           </Button>
+          {showNfcButton && (
+            <Button
+              type="primary"
+              icon={<WifiOutlined />}
+              onClick={() => setNfcWriteModalVisible(true)}
+            >
+              {t("nfc.encode_button")}
+            </Button>
+          )}
           {record?.archived ? (
             <Button icon={<ToTopOutlined />} onClick={() => archiveSpool(record, false)}>
               {t("buttons.unArchive")}
@@ -145,6 +163,11 @@ export const SpoolShow = () => {
 
           {defaultButtons}
           {spoolAdjustModal}
+          <NfcWriteModal
+            spool={record}
+            visible={nfcWriteModalVisible}
+            onClose={() => setNfcWriteModalVisible(false)}
+          />
         </>
       )}
     >
