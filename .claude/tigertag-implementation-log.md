@@ -1,13 +1,26 @@
 # TigerTag Integration - Implementation Log
 
 **Date:** 2026-02-13
-**Branch:** master (all changes are local, uncommitted)
+**Branch:** master
 
 ---
 
-## Status: All 4 Phases Implemented
+## Status: All 4 Phases Implemented and Verified
 
-All code has been written but **not committed** and **not tested**.
+- All code written and committed.
+- Frontend build passes (TypeScript clean).
+- All 223 integration tests pass (SQLite).
+- Manual and NFC hardware testing still pending.
+
+---
+
+## Bugs Fixed During Verification
+
+| File | Issue | Fix |
+|------|-------|-----|
+| `client/src/components/header/index.tsx` | Used non-existent `RefineThemedLayoutV2HeaderProps` export | Reverted to `RefineThemedLayoutHeaderProps` |
+| `client/src/pages/spools/show.tsx` | Used `queryResult` instead of `query` from `useShow()` | Changed to `const { query } = useShow()` |
+| `client/src/pages/spools/show.tsx` | Added unnecessary `IResourceComponentsProps` and `React` import | Removed; matches upstream component signature |
 
 ---
 
@@ -19,7 +32,7 @@ All code has been written but **not committed** and **not tested**.
 |------|-------|-------------|
 | `spoolman/tigertagdb.py` | 1 | TigerTag API client, Pydantic models, sync scheduler, cache |
 | `spoolman/tigertag_codec.py` | 3 | NTAG213 binary encoder/decoder (144 bytes, struct-based) |
-| `spoolman/nfc_service.py` | 3 | NFC reader singleton wrapping nfcpy (PN532/ACR122U) |
+| `spoolman/nfc_service.py` | 3 | NFC reader singleton wrapping nfcpy |
 | `spoolman/tigertag_lookup.py` | 3 | Spool-to-TigerTag matching and reverse mapping |
 | `spoolman/api/v1/nfc.py` | 3 | NFC API endpoints (status/read/write) |
 | `client/src/utils/nfc.ts` | 4 | TS types, React Query hooks, Web NFC declarations |
@@ -67,20 +80,18 @@ All code has been written but **not committed** and **not tested**.
 
 ---
 
-## Remaining TODO / Verification Steps
+## Remaining TODO
 
-1. **Run backend tests** - No new tests written yet; existing tests should pass
-2. **Run frontend build** (`cd client && npm run build`) - verify TypeScript compiles
-3. **Manual testing with `SPOOLMAN_TIGERTAG_ENABLED=TRUE`**:
+1. **Manual testing with `SPOOLMAN_TIGERTAG_ENABLED=TRUE`**:
    - Check logs for "Syncing TigerTag DB"
    - `GET /api/v1/external/filament` should return entries with both sources
    - Filament import modal should show colored source badges
-4. **NFC testing** (requires hardware):
+2. **NFC testing** (requires hardware):
    - `SPOOLMAN_NFC_ENABLED=TRUE` with PN532/ACR122U reader
    - `GET /api/v1/nfc/status` returns `connected`
    - Write/read cycle via spool detail page
    - Browser Web NFC on Chrome Android
-5. **Edge cases to verify**:
+3. **Edge cases to verify**:
    - TigerTag disabled: no tigertag entries in `/external/filament`, no errors
    - NFC disabled: NFC button hidden in UI, `/nfc/status` returns `disabled`
    - TigerTag API unreachable: graceful fallback, SpoolmanDB still works

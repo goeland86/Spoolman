@@ -1,11 +1,11 @@
 import { getBasePath } from "../../utils/url";
 import { InboxOutlined, PrinterOutlined, ToTopOutlined, ToolOutlined, WifiOutlined } from "@ant-design/icons";
 import { DateField, NumberField, Show, TextField } from "@refinedev/antd";
-import { IResourceComponentsProps, useInvalidate, useShow, useTranslate } from "@refinedev/core";
+import { useInvalidate, useShow, useTranslate } from "@refinedev/core";
 import { Button, Modal, Typography } from "antd";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import React, { useState } from "react";
+import { useState } from "react";
 import { ExtraFieldDisplay } from "../../components/extraFields";
 import { NumberFieldUnit } from "../../components/numberField";
 import SpoolIcon from "../../components/spoolIcon";
@@ -23,16 +23,16 @@ dayjs.extend(utc);
 const { Title } = Typography;
 const { confirm } = Modal;
 
-export const SpoolShow: React.FC<IResourceComponentsProps> = () => {
+export const SpoolShow = () => {
   const t = useTranslate();
   const extraFields = useGetFields(EntityType.spool);
   const currencyFormatter = useCurrencyFormatter();
   const invalidate = useInvalidate();
 
-  const { queryResult } = useShow<ISpool>({
+  const { query } = useShow<ISpool>({
     liveMode: "auto",
   });
-  const { data, isLoading } = queryResult;
+  const { data, isLoading } = query;
 
   const record = data?.data;
 
