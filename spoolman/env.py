@@ -477,7 +477,7 @@ def get_tigertag_api_url() -> str:
         str: The TigerTag API URL.
 
     """
-    return os.getenv("SPOOLMAN_TIGERTAG_API_URL", "https://api.tigertag.io/")
+    return os.getenv("SPOOLMAN_TIGERTAG_API_URL", "https://api.tigertag.io/api:tigertag/")
 
 
 def get_tigertag_sync_interval() -> int:
@@ -519,7 +519,7 @@ def get_nfc_reader_type() -> str:
     return os.getenv("SPOOLMAN_NFC_READER_TYPE", "nfcpy")
 
 
-def get_nfc_device_path() -> Optional[str]:
+def get_nfc_device_path() -> str | None:
     """Get the NFC device path from environment variables.
 
     Returns None for auto-detection.

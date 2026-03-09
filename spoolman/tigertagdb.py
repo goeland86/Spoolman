@@ -6,28 +6,17 @@ import logging
 from typing import Optional
 from urllib.parse import urljoin
 
-import hishel
+import httpx
 from pydantic import BaseModel
 from scheduler.asyncio.scheduler import Scheduler
 
 from spoolman import filecache
-from spoolman.env import get_cache_dir, get_tigertag_api_url, get_tigertag_sync_interval, is_tigertag_enabled
+from spoolman.env import get_tigertag_api_url, get_tigertag_sync_interval, is_tigertag_enabled
 from spoolman.externaldb import ExternalFilament
 
 logger = logging.getLogger(__name__)
 
 TIGERTAG_CACHE_FILE = "tigertag_filaments.json"
-
-controller = hishel.Controller(allow_stale=True)
-try:
-    cache_path = get_cache_dir() / "hishel_tigertag"
-    cache_storage = hishel.AsyncFileStorage(base_path=cache_path)
-except PermissionError:
-    logger.warning(
-        "Failed to setup disk-based cache for TigerTag due to permission error. "
-        "Using in-memory cache instead as fallback.",
-    )
-    cache_storage = hishel.AsyncInMemoryStorage()
 
 
 class TigerTagBrand(BaseModel):
@@ -48,76 +37,87 @@ class TigerTagMaterial(BaseModel):
 class TigerTagProduct(BaseModel):
     """A filament product from the TigerTag API."""
 
-    id_product: int
-    id_brand: Optional[int] = None
-    brand_name: Optional[str] = None
-    id_type: Optional[int] = None
-    type_name: Optional[str] = None
-    name: Optional[str] = None
-    color_hex: Optional[str] = None
-    diameter: Optional[float] = None
-    weight: Optional[float] = None
-    spool_weight: Optional[float] = None
-    density: Optional[float] = None
-    nozzle_temp_min: Optional[int] = None
-    nozzle_temp_max: Optional[int] = None
-    bed_temp_min: Optional[int] = None
-    bed_temp_max: Optional[int] = None
+    id: int
+    product_type: Optional[str] = None
+    brand: Optional[str] = None
+    title: Optional[str] = None
+    material: Optional[str] = None
+    color: Optional[str] = None
+    color_info: Optional[dict] = None
+    measure: Optional[str] = None
+    sku: Optional[str] = None
+
+
+def _parse_weight_from_measure(measure: Optional[str]) -> float:
+    """Parse weight in grams from measure string like '1 kg' or '500 g'."""
+    if not measure:
+        return 1000.0
+    measure = measure.strip().lower()
+    try:
+        if "kg" in measure:
+            return float(measure.replace("kg", "").strip()) * 1000
+        if "g" in measure:
+            return float(measure.replace("g", "").strip())
+    except ValueError:
+        pass
+    return 1000.0
 
 
 def _to_external_filament(product: TigerTagProduct) -> ExternalFilament:
     """Convert a TigerTag product into an ExternalFilament."""
-    manufacturer = product.brand_name or "Unknown"
-    material = product.type_name or "Unknown"
-    name = product.name or f"{manufacturer} {material}"
-    diameter = product.diameter or 1.75
-    density = product.density or 1.24
-    weight = product.weight or 1000.0
+    manufacturer = product.brand or "Unknown"
+    material = product.material or "Unknown"
+    name = product.title or f"{manufacturer} {material}"
+    weight = _parse_weight_from_measure(product.measure)
 
-    # Use midpoint of temp ranges if available
-    extruder_temp = None
-    if product.nozzle_temp_min is not None and product.nozzle_temp_max is not None:
-        extruder_temp = (product.nozzle_temp_min + product.nozzle_temp_max) // 2
-    elif product.nozzle_temp_min is not None:
-        extruder_temp = product.nozzle_temp_min
-    elif product.nozzle_temp_max is not None:
-        extruder_temp = product.nozzle_temp_max
-
-    bed_temp = None
-    if product.bed_temp_min is not None and product.bed_temp_max is not None:
-        bed_temp = (product.bed_temp_min + product.bed_temp_max) // 2
-    elif product.bed_temp_min is not None:
-        bed_temp = product.bed_temp_min
-    elif product.bed_temp_max is not None:
-        bed_temp = product.bed_temp_max
-
-    # Clean up color hex - remove leading # if present
+    # Clean up color hex - remove leading # and alpha channel if present
     color_hex = None
-    if product.color_hex:
-        color_hex = product.color_hex.lstrip("#")
+    if product.color:
+        hex_str = product.color.lstrip("#")
+        # TigerTag returns 8-char RGBA hex, Spoolman expects 6-char RGB
+        if len(hex_str) == 8:
+            hex_str = hex_str[:6]
+        color_hex = hex_str
 
     return ExternalFilament(
-        id=f"tigertag_{product.id_product}",
+        id=f"tigertag_{product.id}",
         manufacturer=manufacturer,
         name=name,
         material=material,
-        density=density,
+        density=1.24,
         weight=weight,
-        spool_weight=product.spool_weight,
-        diameter=diameter,
+        diameter=1.75,
         color_hex=color_hex,
-        extruder_temp=extruder_temp,
-        bed_temp=bed_temp,
         source="tigertag",
     )
 
 
-async def _download_json(url: str) -> bytes:
-    """Download JSON from a URL using cached HTTP client."""
-    async with hishel.AsyncCacheClient(storage=cache_storage, controller=controller) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        return response.read()
+TIGERTAG_FILAMENT_TYPE_ID = 142
+TIGERTAG_PAGE_SIZE = 50
+
+
+async def _fetch_all_products(base_url: str) -> list[dict]:
+    """Fetch all filament products from TigerTag API using pagination."""
+    products_url = urljoin(base_url, "product/get/all")
+    all_items: list[dict] = []
+    page = 1
+
+    async with httpx.AsyncClient() as client:
+        while True:
+            response = await client.post(
+                products_url,
+                json={"page": page, "per_page": TIGERTAG_PAGE_SIZE, "product_type_id": TIGERTAG_FILAMENT_TYPE_ID},
+            )
+            response.raise_for_status()
+            data = response.json()
+            items = data.get("items", [])
+            all_items.extend(items)
+
+            if data.get("nextPage") is None:
+                break
+            page = data["nextPage"]
+
+    return all_items
 
 
 async def _sync_tigertag() -> None:
@@ -126,10 +126,8 @@ async def _sync_tigertag() -> None:
     base_url = get_tigertag_api_url()
 
     try:
-        # Fetch products from TigerTag API
-        products_url = urljoin(base_url, "product/filament/get")
-        products_data = await _download_json(products_url)
-        products_list = json.loads(products_data)
+        # Fetch all filament products via paginated API
+        products_list = await _fetch_all_products(base_url)
 
         # Parse products
         products = [TigerTagProduct(**p) for p in products_list]
