@@ -93,8 +93,10 @@ class NfcService:
                     return None
 
                 # Read pages 4-39 (NTAG213 user memory)
+                # NTAG213 READ command returns 16 bytes (4 pages) per call,
+                # so we step by 4 to avoid overlapping reads.
                 data = bytearray()
-                for page in range(4, 40):
+                for page in range(4, 40, 4):
                     page_data = tag.read(page)
                     if page_data is None:
                         logger.warning("Failed to read page %d", page)

@@ -43,6 +43,17 @@ export interface NfcWriteResponse {
   message: string;
 }
 
+export interface NfcEncodeRequest {
+  spool_id: number;
+  user_message?: string;
+}
+
+export interface NfcEncodeResponse {
+  success: boolean;
+  binary_b64: string;
+  message: string;
+}
+
 /**
  * React Query hook to get the NFC reader status.
  */
@@ -78,6 +89,58 @@ export function useNfcWrite() {
   return useMutation<NfcWriteResponse, Error, NfcWriteRequest>({
     mutationFn: async (request: NfcWriteRequest) => {
       const response = await fetch(`${getAPIURL()}/nfc/write`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.json();
+    },
+  });
+}
+
+/**
+ * React Query mutation hook to encode a spool as TigerTag binary via the server.
+ */
+export function useNfcEncode() {
+  return useMutation<NfcEncodeResponse, Error, NfcEncodeRequest>({
+    mutationFn: async (request: NfcEncodeRequest) => {
+      const response = await fetch(`${getAPIURL()}/nfc/encode`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.json();
+    },
+  });
+}
+
+export interface NfcCreateFromTagRequest {
+  id_product?: number;
+  id_material?: number;
+  id_diameter?: number;
+  id_brand?: number;
+  color_hex?: string;
+  weight?: number;
+  nozzle_temp?: number;
+  bed_temp?: number;
+  drying_temp?: number;
+  drying_duration?: number;
+  diameter_mm?: number;
+}
+
+export interface NfcCreateFromTagResponse {
+  success: boolean;
+  spool_id?: number;
+  message: string;
+}
+
+/**
+ * React Query mutation hook to create a spool from decoded TigerTag data.
+ */
+export function useNfcCreateFromTag() {
+  return useMutation<NfcCreateFromTagResponse, Error, NfcCreateFromTagRequest>({
+    mutationFn: async (request: NfcCreateFromTagRequest) => {
+      const response = await fetch(`${getAPIURL()}/nfc/create-from-tag`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),

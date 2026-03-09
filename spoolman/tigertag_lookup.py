@@ -36,7 +36,7 @@ async def find_spool_by_tigertag(db: AsyncSession, tag_data: TigerTagData) -> Op
 
     """
     if tag_data.id_product > 0:
-        # Strategy 1: Match by external_id
+        # Strategy 1: Match by external_id on filament
         external_id = f"tigertag_{tag_data.id_product}"
         stmt = (
             select(Spool)
@@ -48,7 +48,18 @@ async def find_spool_by_tigertag(db: AsyncSession, tag_data: TigerTagData) -> Op
             .limit(1)
         )
         result = await db.execute(stmt)
-        spool = result.scalar_one_or_none()
+        spool = result.unique().scalar_one_or_none()
+        if spool is not None:
+            return spool
+
+        # Strategy 2: Match by spool ID directly (for tags written by Spoolman)
+        stmt = (
+            select(Spool)
+            .options(selectinload(Spool.filament).selectinload(Filament.vendor))
+            .where(Spool.id == tag_data.id_product)
+        )
+        result = await db.execute(stmt)
+        spool = result.unique().scalar_one_or_none()
         if spool is not None:
             return spool
 
@@ -76,12 +87,18 @@ def map_spool_to_tigertag(
     filament = spool.filament
     data = TigerTagData()
 
-    # Try to extract product ID from external_id
+    # TigerTag Maker v1.0 magic number and type
+    data.id_tigertag = 0x5C15E2E4
+    data.id_type = 142  # Filament
+
+    # Set product ID: use TigerTag product ID if available, otherwise use spool ID
     if filament.external_id and filament.external_id.startswith("tigertag_"):
         try:
             data.id_product = int(filament.external_id.split("_", 1)[1])
         except (ValueError, IndexError):
-            pass
+            data.id_product = spool.id
+    else:
+        data.id_product = spool.id
 
     # Brand ID lookup
     if brand_map and filament.vendor and filament.vendor.name:
@@ -120,8 +137,8 @@ def map_spool_to_tigertag(
     if filament.settings_bed_temp:
         data.bed_temp = filament.settings_bed_temp
 
-    # Timestamp
-    data.timestamp = int(time.time())
+    # Timestamp - TigerTag uses seconds since 2000-01-01 GMT
+    data.timestamp = int(time.time()) - 946684800
 
     return data
 

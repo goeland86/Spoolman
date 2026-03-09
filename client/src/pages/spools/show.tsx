@@ -12,7 +12,6 @@ import { enrichText } from "../../utils/parsing";
 import { EntityType, useGetFields } from "../../utils/queryFields";
 import { useCurrencyFormatter } from "../../utils/settings";
 import { getBasePath } from "../../utils/url";
-import { isWebNfcSupported, useNfcStatus } from "../../utils/nfc";
 import NfcWriteModal from "../../components/nfcWriteModal";
 import { IFilament } from "../filaments/model";
 import { setSpoolArchived, useSpoolAdjustModal } from "./functions";
@@ -46,9 +45,9 @@ export const SpoolShow = () => {
 
   // NFC state
   const [nfcWriteModalVisible, setNfcWriteModalVisible] = useState(false);
-  const nfcStatus = useNfcStatus();
-  const showNfcButton =
-    (nfcStatus.data?.enabled === true && nfcStatus.data?.status === "connected") || isWebNfcSupported();
+  // Always show the NFC button — the modal handles mode availability,
+  // and the "Download Raw Binary" option works without NFC hardware or Web NFC.
+  const showNfcButton = true;
 
   // Provides the function to open the spool adjustment modal and the modal component itself
   const { openSpoolAdjustModal, spoolAdjustModal } = useSpoolAdjustModal();

@@ -6,12 +6,18 @@ to/from NTAG213 NFC chips (144 bytes user memory, pages 4-39).
 Based on the TigerTag RFID Guide specification.
 """
 
+import logging
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # NTAG213 has 144 bytes of user memory (pages 4-39, 36 pages x 4 bytes)
 NTAG213_USER_BYTES = 144
+
+# TigerTag Maker v1.0 magic number
+TIGERTAG_MAKER_V1 = 0x5C15E2E4
 
 
 @dataclass
@@ -19,12 +25,12 @@ class TigerTagData:
     """Represents all data fields stored on a TigerTag NFC chip."""
 
     # Core identifiers
-    id_tigertag: int = 0  # 4 bytes - unique tag ID
-    id_product: int = 0  # 4 bytes - product/filament ID
+    id_tigertag: int = 0  # 4 bytes - magic number / format identifier
+    id_product: int = 0  # 4 bytes - product/filament ID (0xFFFFFFFF = Factory)
     id_material: int = 0  # 2 bytes - material type ID
-    id_diameter: int = 0  # 1 byte - diameter ID (0=unknown, 1=1.75mm, 2=2.85mm)
-    id_aspect: int = 0  # 2 bytes - aspect/finish ID
-    id_type: int = 0  # 1 byte - type ID
+    id_diameter: int = 0  # 1 byte - diameter ID (TigerTag numbering)
+    id_aspect: int = 0  # 1 byte - aspect/finish ID
+    id_type: int = 0  # 1 byte - type ID (142=filament)
     id_brand: int = 0  # 2 bytes - brand/manufacturer ID
 
     # Color as RGBA
@@ -34,17 +40,18 @@ class TigerTagData:
     color_a: int = 255  # 1 byte
 
     # Spool properties
-    weight: int = 0  # 2 bytes - net weight in grams
-    volume: int = 0  # 2 bytes - volume in cm3
+    weight: int = 0  # net weight in grams
 
     # Temperature settings
-    nozzle_temp: int = 0  # 2 bytes - nozzle temp in C
-    bed_temp: int = 0  # 2 bytes - bed temp in C
-    drying_temp: int = 0  # 2 bytes - drying temp in C
-    drying_duration: int = 0  # 2 bytes - drying duration in minutes
+    nozzle_temp: int = 0  # nozzle temp min in °C
+    nozzle_temp_max: int = 0  # nozzle temp max in °C
+    bed_temp: int = 0  # bed temp min in °C
+    bed_temp_max: int = 0  # bed temp max in °C
+    drying_temp: int = 0  # drying temp in °C
+    drying_duration: int = 0  # drying time in hours
 
     # Metadata
-    timestamp: int = 0  # 4 bytes - Unix timestamp
+    timestamp: int = 0  # 4 bytes - seconds since 2000-01-01 GMT
     emoji: int = 0  # 4 bytes - emoji codepoint
 
     # User message - 28 bytes UTF-8
@@ -76,37 +83,48 @@ class TigerTagData:
             return 1.75
         if self.id_diameter == 2:
             return 2.85
+        # TigerTag uses larger IDs — look up common ones
+        if self.id_diameter == 56:
+            return 1.75
+        if self.id_diameter == 57:
+            return 2.85
         return 0.0
 
 
-# Binary format layout (144 bytes total, big-endian):
-# Offset  Size  Field
-# 0       4     id_tigertag
-# 4       4     id_product
-# 8       2     id_material
-# 10      1     id_diameter
-# 11      2     id_aspect
-# 13      1     id_type
-# 14      2     id_brand
-# 16      1     color_r
-# 17      1     color_g
-# 18      1     color_b
-# 19      1     color_a
-# 20      2     weight
-# 22      2     volume
-# 24      2     nozzle_temp
-# 26      2     bed_temp
-# 28      2     drying_temp
-# 30      2     drying_duration
-# 32      4     timestamp
-# 36      4     emoji
-# 40      28    user_message (UTF-8, null-padded)
-# 68-143  76    reserved (zeros)
+# TigerTag binary format (big-endian, 36-byte header):
+#
+# Offset  Size  Format  Field
+# 0       4     >I      id_tigertag
+# 4       4     >I      id_product
+# 8       2     >H      id_material
+# 10      1     B       id_aspect_1
+# 11      1     B       id_aspect_2
+# 12      1     B       id_type
+# 13      1     B       id_diameter
+# 14      2     >H      id_brand
+# 16      4     >I      color_rgba (R<<24 | G<<16 | B<<8 | A)
+# 20      4     >I      weight_unit (weight<<8 | unit_id)
+# 24      2     >H      nozzle_temp_min
+# 26      2     >H      nozzle_temp_max
+# 28      1     B       drying_temp
+# 29      1     B       drying_time (hours)
+# 30      2     >H      reserved (0)
+# 32      4     >I      timestamp
+#
+# After header:
+# 36      1     B       bed_temp_min
+# 37      1     B       bed_temp_max
+# 38-53   16    -       reserved
+# 54      4     >I      emoji
+# 58      28    UTF-8   user_message
+# 86-143  58    -       signature / reserved
 
-_HEADER_FORMAT = "!II HBH BH BBBB HH HH HH HH I I"
-_HEADER_SIZE = struct.calcsize(_HEADER_FORMAT)  # 40 bytes
+_HEADER_FMT = ">II HBB BBH I I HH BBH I"
+_HEADER_SIZE = struct.calcsize(_HEADER_FMT)  # 36 bytes
 _USER_MESSAGE_SIZE = 28
-_DATA_SIZE = _HEADER_SIZE + _USER_MESSAGE_SIZE  # 68 bytes
+_USER_MESSAGE_OFFSET = 58
+_EMOJI_OFFSET = 54
+_BED_TEMP_OFFSET = 36
 
 
 def decode_ntag213(raw_bytes: bytes) -> TigerTagData:
@@ -122,40 +140,64 @@ def decode_ntag213(raw_bytes: bytes) -> TigerTagData:
         ValueError: If the data is too short to decode.
 
     """
-    if len(raw_bytes) < _DATA_SIZE:
-        raise ValueError(f"Data too short: expected at least {_DATA_SIZE} bytes, got {len(raw_bytes)}")
+    if len(raw_bytes) < _HEADER_SIZE:
+        raise ValueError(f"Data too short: expected at least {_HEADER_SIZE} bytes, got {len(raw_bytes)}")
 
-    values = struct.unpack_from(_HEADER_FORMAT, raw_bytes, 0)
+    # Debug: dump raw bytes for diagnosing format issues
+    hex_dump = " ".join(f"{b:02x}" for b in raw_bytes[:68])
+    logger.info("TigerTag raw bytes (first 68): %s", hex_dump)
+
+    values = struct.unpack_from(_HEADER_FMT, raw_bytes, 0)
+
+    # Unpack color from RGBA uint32: value = R<<24 | G<<16 | B<<8 | A
+    color_val = values[8]
+    color_r = (color_val >> 24) & 0xFF
+    color_g = (color_val >> 16) & 0xFF
+    color_b = (color_val >> 8) & 0xFF
+    color_a = color_val & 0xFF
+
+    # Unpack weight + unit: weight in upper 24 bits, unit_id in lower 8
+    weight_unit = values[9]
+    weight = (weight_unit >> 8) & 0xFFFFFF
 
     data = TigerTagData(
         id_tigertag=values[0],
         id_product=values[1],
         id_material=values[2],
-        id_diameter=values[3],
-        id_aspect=values[4],
+        id_aspect=values[3],  # aspect_1
+        # values[4] = aspect_2, ignored
         id_type=values[5],
-        id_brand=values[6],
-        color_r=values[7],
-        color_g=values[8],
-        color_b=values[9],
-        color_a=values[10],
-        weight=values[11],
-        volume=values[12],
-        nozzle_temp=values[13],
-        bed_temp=values[14],
-        drying_temp=values[15],
-        drying_duration=values[16],
-        timestamp=values[17],
-        emoji=values[18],
+        id_diameter=values[6],
+        id_brand=values[7],
+        color_r=color_r,
+        color_g=color_g,
+        color_b=color_b,
+        color_a=color_a,
+        weight=weight,
+        nozzle_temp=values[10],
+        nozzle_temp_max=values[11],
+        drying_temp=values[12],
+        drying_duration=values[13],
+        # values[14] = reserved
+        timestamp=values[15],
     )
 
-    # Decode user message (28 bytes, UTF-8, null-terminated)
-    msg_bytes = raw_bytes[_HEADER_SIZE : _HEADER_SIZE + _USER_MESSAGE_SIZE]
-    # Strip null bytes
-    null_idx = msg_bytes.find(b"\x00")
-    if null_idx >= 0:
-        msg_bytes = msg_bytes[:null_idx]
-    data.user_message = msg_bytes.decode("utf-8", errors="replace")
+    # Read bed temp (uint8 each) at offset 36-37
+    if len(raw_bytes) > _BED_TEMP_OFFSET + 1:
+        data.bed_temp = raw_bytes[_BED_TEMP_OFFSET]
+        data.bed_temp_max = raw_bytes[_BED_TEMP_OFFSET + 1]
+
+    # Read emoji at offset 54
+    if len(raw_bytes) >= _EMOJI_OFFSET + 4:
+        data.emoji = struct.unpack_from(">I", raw_bytes, _EMOJI_OFFSET)[0]
+
+    # Read user message at offset 58
+    if len(raw_bytes) >= _USER_MESSAGE_OFFSET + _USER_MESSAGE_SIZE:
+        msg_bytes = raw_bytes[_USER_MESSAGE_OFFSET : _USER_MESSAGE_OFFSET + _USER_MESSAGE_SIZE]
+        null_idx = msg_bytes.find(b"\x00")
+        if null_idx >= 0:
+            msg_bytes = msg_bytes[:null_idx]
+        data.user_message = msg_bytes.decode("utf-8", errors="replace")
 
     return data
 
@@ -167,35 +209,45 @@ def encode_ntag213(data: TigerTagData) -> bytes:
         bytes: 144 bytes to write to NTAG213 pages 4-39.
 
     """
+    # Pack color as RGBA uint32: R<<24 | G<<16 | B<<8 | A
+    color_val = (data.color_r << 24) | (data.color_g << 16) | (data.color_b << 8) | data.color_a
+
+    # Pack weight + unit_id: weight<<8 | unit (unit=1 for grams)
+    weight_unit = ((data.weight & 0xFFFFFF) << 8) | 1
+
     header = struct.pack(
-        _HEADER_FORMAT,
+        _HEADER_FMT,
         data.id_tigertag,
         data.id_product,
         data.id_material,
-        data.id_diameter,
-        data.id_aspect,
+        data.id_aspect,  # aspect_1
+        0,  # aspect_2
         data.id_type,
+        data.id_diameter,
         data.id_brand,
-        data.color_r,
-        data.color_g,
-        data.color_b,
-        data.color_a,
-        data.weight,
-        data.volume,
+        color_val,
+        weight_unit,
         data.nozzle_temp,
-        data.bed_temp,
+        data.nozzle_temp_max,
         data.drying_temp,
         data.drying_duration,
+        0,  # reserved
         data.timestamp,
-        data.emoji,
     )
 
-    # Encode user message (28 bytes, null-padded)
+    # Build full 144-byte payload
+    payload = bytearray(NTAG213_USER_BYTES)
+    payload[: len(header)] = header
+
+    # Bed temp at offset 36-37
+    payload[_BED_TEMP_OFFSET] = data.bed_temp & 0xFF
+    payload[_BED_TEMP_OFFSET + 1] = data.bed_temp_max & 0xFF
+
+    # Emoji at offset 54
+    struct.pack_into(">I", payload, _EMOJI_OFFSET, data.emoji)
+
+    # User message at offset 58 (28 bytes, null-padded)
     msg_bytes = data.user_message.encode("utf-8")[:_USER_MESSAGE_SIZE]
-    msg_padded = msg_bytes.ljust(_USER_MESSAGE_SIZE, b"\x00")
+    payload[_USER_MESSAGE_OFFSET : _USER_MESSAGE_OFFSET + len(msg_bytes)] = msg_bytes
 
-    # Combine header + message + padding to fill 144 bytes
-    payload = header + msg_padded
-    padding = b"\x00" * (NTAG213_USER_BYTES - len(payload))
-
-    return payload + padding
+    return bytes(payload)

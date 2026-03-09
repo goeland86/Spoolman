@@ -409,6 +409,15 @@
         "write_error": "Failed to write tag.",
         "no_match": "No matching spool found for this tag.",
         "create_from_tag": "Create Spool from Tag",
+        "create_from_tag_description": "No matching spool found. You can create a new spool from the tag data below.",
+        "creating_spool": "Creating spool...",
+        "create_success": "Spool created successfully!",
+        "create_error": "Failed to create spool from tag data.",
+        "tag_color": "Color",
+        "tag_diameter": "Diameter",
+        "tag_weight": "Weight",
+        "tag_nozzle_temp": "Nozzle Temp",
+        "tag_bed_temp": "Bed Temp",
         "mode_browser": "Browser",
         "mode_server": "Server",
         "unsupported": "NFC is not supported in this browser.",
@@ -423,12 +432,17 @@
             "disconnected": "Disconnected",
             "disabled": "Disabled"
         },
+        "browser_ndef_warning": "Browser NFC writes use NDEF format, which wraps TigerTag data in an NDEF record. For raw NTAG213 page writes, use the Download Raw Binary option with an external NFC tool.",
+        "download_raw_binary": "Download Raw Binary",
+        "download_success": "Binary file downloaded successfully.",
+        "browser_write_success": "TigerTag data written to NFC tag via NDEF.",
         "error": {
             "no_reader": "No NFC reader detected.",
             "read_failed": "Failed to read tag.",
             "write_failed": "Failed to write tag.",
             "not_supported": "Web NFC is not supported in this browser. Use the Server mode with a connected reader.",
-            "permission_denied": "NFC permission denied."
+            "permission_denied": "NFC permission denied.",
+            "encode_failed": "Failed to encode TigerTag data."
         }
     }
 }

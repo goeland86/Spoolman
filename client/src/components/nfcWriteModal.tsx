@@ -1,8 +1,10 @@
+import { DownloadOutlined } from "@ant-design/icons";
 import { useTranslate } from "@refinedev/core";
-import { Alert, Descriptions, Input, Modal, Segmented, Space, Spin, Typography } from "antd";
+import { Alert, Button, Descriptions, Input, Modal, Segmented, Space, Spin, Typography } from "antd";
 import React, { useCallback, useState } from "react";
-import { isWebNfcSupported, useNfcStatus, useNfcWrite } from "../utils/nfc";
+import { isWebNfcSupported, useNfcEncode, useNfcStatus, useNfcWrite } from "../utils/nfc";
 import { ISpool } from "../pages/spools/model";
+import { encodeTigerTag, mapSpoolToTigerTag } from "../utils/tigertagCodec";
 
 const { Text } = Typography;
 
@@ -13,7 +15,7 @@ interface NfcWriteModalProps {
 }
 
 const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }) => {
-  const [mode, setMode] = useState<"browser" | "server">("server");
+  const [modeOverride, setModeOverride] = useState<"browser" | "server" | null>(null);
   const [userMessage, setUserMessage] = useState("");
   const [browserWriting, setBrowserWriting] = useState(false);
   const [browserResult, setBrowserResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -21,19 +23,22 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
 
   const nfcStatus = useNfcStatus();
   const nfcWriteMutation = useNfcWrite();
+  const nfcEncodeMutation = useNfcEncode();
 
   const serverEnabled = nfcStatus.data?.enabled === true && nfcStatus.data?.status === "connected";
   const webNfcAvailable = isWebNfcSupported();
 
+  // Default to server if available, then browser, then browser anyway (for download button)
+  const mode = modeOverride ?? (serverEnabled ? "server" : "browser");
+  const canWrite = mode === "server" ? serverEnabled : webNfcAvailable;
+
   const handleServerWrite = useCallback(async () => {
     if (!spool) return;
 
-    const result = await nfcWriteMutation.mutateAsync({
+    await nfcWriteMutation.mutateAsync({
       spool_id: spool.id,
       user_message: userMessage,
     });
-
-    // Result is handled by mutation state
   }, [spool, userMessage, nfcWriteMutation]);
 
   const handleBrowserWrite = useCallback(async () => {
@@ -47,19 +52,21 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
 
     try {
       const reader = new window.NDEFReader();
+      const tagData = mapSpoolToTigerTag(spool, userMessage);
+      const binaryPayload = encodeTigerTag(tagData);
 
-      // Write a URI record that Spoolman can recognize
+      // Write as NDEF external type record with TigerTag binary payload
       await reader.write({
         records: [
           {
-            recordType: "url",
-            data: `web+spoolman:s-${spool.id}`,
+            recordType: "tigertag.io:maker",
+            data: binaryPayload,
           },
         ],
       });
 
       setBrowserWriting(false);
-      setBrowserResult({ success: true, message: t("nfc.write_success") });
+      setBrowserResult({ success: true, message: t("nfc.browser_write_success") });
     } catch (error) {
       setBrowserWriting(false);
       if (error instanceof DOMException && error.name === "NotAllowedError") {
@@ -68,7 +75,38 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
         setBrowserResult({ success: false, message: t("nfc.write_error") });
       }
     }
-  }, [spool, t]);
+  }, [spool, userMessage, t]);
+
+  const handleDownloadBinary = useCallback(async () => {
+    if (!spool) return;
+
+    try {
+      const result = await nfcEncodeMutation.mutateAsync({
+        spool_id: spool.id,
+        user_message: userMessage,
+      });
+
+      if (result.success && result.binary_b64) {
+        const binaryString = atob(result.binary_b64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: "application/octet-stream" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `spool-${spool.id}-tigertag.bin`;
+        a.click();
+        URL.revokeObjectURL(url);
+        setBrowserResult({ success: true, message: t("nfc.download_success") });
+      } else {
+        setBrowserResult({ success: false, message: result.message || t("nfc.error.encode_failed") });
+      }
+    } catch {
+      setBrowserResult({ success: false, message: t("nfc.error.encode_failed") });
+    }
+  }, [spool, userMessage, nfcEncodeMutation, t]);
 
   const handleOk = () => {
     if (mode === "server") {
@@ -89,9 +127,10 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
         onClose();
         setBrowserResult(null);
         setUserMessage("");
+        setModeOverride(null);
       }}
       okText={nfcWriteMutation.isPending || browserWriting ? t("nfc.writing") : t("nfc.encode_button")}
-      okButtonProps={{ loading: nfcWriteMutation.isPending || browserWriting }}
+      okButtonProps={{ loading: nfcWriteMutation.isPending || browserWriting, disabled: !canWrite }}
       destroyOnClose
     >
       <Space direction="vertical" style={{ width: "100%" }} size="middle">
@@ -99,10 +138,10 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
           block
           options={[
             { label: t("nfc.mode_server"), value: "server", disabled: !serverEnabled },
-            { label: t("nfc.mode_browser"), value: "browser", disabled: !webNfcAvailable },
+            { label: t("nfc.mode_browser"), value: "browser" },
           ]}
           value={mode}
-          onChange={(value) => setMode(value as "browser" | "server")}
+          onChange={(value) => setModeOverride(value as "browser" | "server")}
         />
 
         {filament && (
@@ -152,17 +191,15 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
           </>
         )}
 
-        {mode === "server" && (
-          <div>
-            <Text>{t("nfc.user_message")}</Text>
-            <Input
-              value={userMessage}
-              onChange={(e) => setUserMessage(e.target.value.slice(0, 28))}
-              maxLength={28}
-              placeholder={t("nfc.user_message_help")}
-            />
-          </div>
-        )}
+        <div>
+          <Text>{t("nfc.user_message")}</Text>
+          <Input
+            value={userMessage}
+            onChange={(e) => setUserMessage(e.target.value.slice(0, 28))}
+            maxLength={28}
+            placeholder={t("nfc.user_message_help")}
+          />
+        </div>
 
         {mode === "server" && (nfcWriteMutation.isPending || browserWriting) && (
           <Spin tip={t("nfc.place_tag")}>
@@ -197,9 +234,16 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
         )}
 
         {mode === "browser" && (
-          <Text type="secondary">
-            {t("nfc.scan_description")}
-          </Text>
+          <>
+            <Alert type="info" message={t("nfc.browser_ndef_warning")} showIcon />
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={handleDownloadBinary}
+              loading={nfcEncodeMutation.isPending}
+            >
+              {t("nfc.download_raw_binary")}
+            </Button>
+          </>
         )}
       </Space>
     </Modal>
