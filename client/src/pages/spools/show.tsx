@@ -1,4 +1,4 @@
-import { InboxOutlined, PrinterOutlined, ToTopOutlined, ToolOutlined, WifiOutlined } from "@ant-design/icons";
+import { InboxOutlined, LinkOutlined, PrinterOutlined, ToTopOutlined, ToolOutlined, WifiOutlined } from "@ant-design/icons";
 import { DateField, NumberField, Show, TextField } from "@refinedev/antd";
 import { useInvalidate, useShow, useTranslate } from "@refinedev/core";
 import { Button, Modal, Typography } from "antd";
@@ -12,6 +12,7 @@ import { enrichText } from "../../utils/parsing";
 import { EntityType, useGetFields } from "../../utils/queryFields";
 import { useCurrencyFormatter } from "../../utils/settings";
 import { getBasePath } from "../../utils/url";
+import NfcBindModal from "../../components/nfcBindModal";
 import NfcWriteModal from "../../components/nfcWriteModal";
 import { IFilament } from "../filaments/model";
 import { setSpoolArchived, useSpoolAdjustModal } from "./functions";
@@ -45,6 +46,7 @@ export const SpoolShow = () => {
 
   // NFC state
   const [nfcWriteModalVisible, setNfcWriteModalVisible] = useState(false);
+  const [nfcBindModalVisible, setNfcBindModalVisible] = useState(false);
   // Always show the NFC button — the modal handles mode availability,
   // and the "Download Raw Binary" option works without NFC hardware or Web NFC.
   const showNfcButton = true;
@@ -142,13 +144,22 @@ export const SpoolShow = () => {
             {t("printing.qrcode.button")}
           </Button>
           {showNfcButton && (
-            <Button
-              type="primary"
-              icon={<WifiOutlined />}
-              onClick={() => setNfcWriteModalVisible(true)}
-            >
-              {t("nfc.encode_button")}
-            </Button>
+            <>
+              <Button
+                type="primary"
+                icon={<LinkOutlined />}
+                onClick={() => setNfcBindModalVisible(true)}
+              >
+                {t("nfc.bind_button")}
+              </Button>
+              <Button
+                type="primary"
+                icon={<WifiOutlined />}
+                onClick={() => setNfcWriteModalVisible(true)}
+              >
+                {t("nfc.encode_button")}
+              </Button>
+            </>
           )}
           {record?.archived ? (
             <Button icon={<ToTopOutlined />} onClick={() => archiveSpool(record, false)}>
@@ -162,6 +173,12 @@ export const SpoolShow = () => {
 
           {defaultButtons}
           {spoolAdjustModal}
+          <NfcBindModal
+            spool={record}
+            visible={nfcBindModalVisible}
+            onClose={() => setNfcBindModalVisible(false)}
+            onBound={() => invalidate({ resource: "spool", id: record?.id, invalidates: ["detail"] })}
+          />
           <NfcWriteModal
             spool={record}
             visible={nfcWriteModalVisible}

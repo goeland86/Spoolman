@@ -128,6 +128,7 @@ const NfcScannerModal: React.FC = () => {
                   bed_temp: tagData.bed_temp,
                   drying_temp: tagData.drying_temp,
                   drying_duration: tagData.drying_duration,
+                  timestamp: tagData.timestamp,
                   user_message: tagData.user_message,
                   diameter_mm: diameterMm,
                 });

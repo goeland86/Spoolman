@@ -16,6 +16,7 @@ export interface TigerTagData {
   bed_temp: number;
   drying_temp: number;
   drying_duration: number;
+  timestamp: number;
   user_message: string;
   diameter_mm: number;
 }
@@ -105,6 +106,37 @@ export function useNfcEncode() {
   return useMutation<NfcEncodeResponse, Error, NfcEncodeRequest>({
     mutationFn: async (request: NfcEncodeRequest) => {
       const response = await fetch(`${getAPIURL()}/nfc/encode`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      return response.json();
+    },
+  });
+}
+
+export interface NfcBindRequest {
+  spool_id: number;
+  raw_data_b64?: string;
+  id_product?: number;
+  timestamp?: number;
+  nfc_tag_uid?: string;
+}
+
+export interface NfcBindResponse {
+  success: boolean;
+  nfc_tag_id?: string;
+  tag_data?: TigerTagData;
+  message: string;
+}
+
+/**
+ * React Query mutation hook to bind an NFC tag to an existing spool.
+ */
+export function useNfcBind() {
+  return useMutation<NfcBindResponse, Error, NfcBindRequest>({
+    mutationFn: async (request: NfcBindRequest) => {
+      const response = await fetch(`${getAPIURL()}/nfc/bind`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
