@@ -270,6 +270,218 @@ async def nfc_encode(
         return NfcEncodeResponse(success=False, message="Failed to encode TigerTag data.")
 
 
+class OpenPrintTagDataResponse(BaseModel):
+    """Decoded OpenPrintTag data from an NFC-V tag."""
+
+    instance_uuid: Optional[str] = None
+    package_uuid: Optional[str] = None
+    brand_uuid: Optional[str] = None
+    material_uuid: Optional[str] = None
+    brand_name: Optional[str] = None
+    material_name: Optional[str] = None
+    material_type: Optional[str] = None
+    material_class: Optional[str] = None
+    primary_color_hex: Optional[str] = None
+    density: Optional[float] = None
+    filament_diameter: Optional[float] = None
+    nominal_netto_full_weight: Optional[float] = None
+    actual_netto_full_weight: Optional[float] = None
+    empty_container_weight: Optional[float] = None
+    consumed_weight: Optional[float] = None
+    min_print_temperature: Optional[int] = None
+    max_print_temperature: Optional[int] = None
+    min_bed_temperature: Optional[int] = None
+    max_bed_temperature: Optional[int] = None
+    drying_temperature: Optional[int] = None
+    drying_time: Optional[int] = None
+
+
+class NfcLookupRequest(BaseModel):
+    """Request body for looking up a spool from external NFC data."""
+
+    raw_data_b64: Optional[str] = Field(default=None, description="Base64-encoded raw tag memory.")
+    id_product: Optional[int] = Field(default=None, description="TigerTag product/spool ID to look up directly.")
+    tag_type: Optional[str] = Field(default=None, description="Tag type: 'tigertag', 'openprinttag', or null for auto-detect.")
+    nfc_tag_uid: Optional[str] = Field(default=None, description="Hex-encoded NFC tag UID (for OpenPrintTag UUID derivation).")
+    auto_create: bool = Field(default=False, description="Auto-create spool if no match found (OpenPrintTag only).")
+
+
+class NfcLookupResponse(BaseModel):
+    """Response for NFC lookup endpoint."""
+
+    success: bool
+    spool_id: Optional[int] = None
+    tag_format: Optional[str] = None
+    tag_data: Optional[TigerTagDataResponse] = None
+    openprinttag_data: Optional[OpenPrintTagDataResponse] = None
+    message: str = ""
+
+
+def _detect_tag_format(raw_data: bytes, tag_type: str | None) -> str:
+    """Auto-detect tag format from raw bytes, or use explicit tag_type."""
+    if tag_type in ("tigertag", "openprinttag"):
+        return tag_type
+    # NFC-V capability container starts with 0xE1
+    if len(raw_data) >= 1 and raw_data[0] == 0xE1:
+        return "openprinttag"
+    return "tigertag"
+
+
+@router.post(
+    "/lookup",
+    name="Look up spool from NFC tag data",
+    response_model=NfcLookupResponse,
+)
+async def nfc_lookup(
+    request: NfcLookupRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> NfcLookupResponse:
+    """Look up a spool from externally-read NFC tag data.
+
+    Auto-detects tag format (TigerTag or OpenPrintTag) from raw bytes,
+    or accepts an explicit tag_type. Designed for Klipper/Moonraker
+    integrations where the NFC reader is attached to the printer.
+    """
+    if not request.raw_data_b64 and request.id_product is None:
+        return NfcLookupResponse(
+            success=False,
+            message="Provide either raw_data_b64 or id_product.",
+        )
+
+    # Direct id_product lookup (TigerTag shortcut)
+    if request.id_product is not None and not request.raw_data_b64:
+        return await _lookup_tigertag_by_id(db, request.id_product)
+
+    try:
+        raw_data = base64.b64decode(request.raw_data_b64)
+    except Exception:
+        return NfcLookupResponse(success=False, message="Invalid base64 in raw_data_b64.")
+
+    tag_format = _detect_tag_format(raw_data, request.tag_type)
+
+    if tag_format == "openprinttag":
+        return await _lookup_openprinttag(db, raw_data, request.nfc_tag_uid, request.auto_create)
+    return await _lookup_tigertag(db, raw_data)
+
+
+async def _lookup_tigertag(db: AsyncSession, raw_data: bytes) -> NfcLookupResponse:
+    """Handle TigerTag lookup from raw binary data."""
+    try:
+        from spoolman.tigertag_codec import decode_ntag213  # noqa: PLC0415
+        from spoolman.tigertag_lookup import find_spool_by_tigertag  # noqa: PLC0415
+
+        tag_data = decode_ntag213(raw_data)
+        spool = await find_spool_by_tigertag(db, tag_data)
+        spool_id = spool.id if spool else None
+
+        tag_response = TigerTagDataResponse(
+            id_tigertag=tag_data.id_tigertag,
+            id_product=tag_data.id_product,
+            id_material=tag_data.id_material,
+            id_diameter=tag_data.id_diameter,
+            id_brand=tag_data.id_brand,
+            color_hex=tag_data.color_hex,
+            weight=tag_data.weight,
+            nozzle_temp=tag_data.nozzle_temp,
+            bed_temp=tag_data.bed_temp,
+            drying_temp=tag_data.drying_temp,
+            drying_duration=tag_data.drying_duration,
+            user_message=tag_data.user_message,
+            diameter_mm=tag_data.diameter_mm,
+        )
+
+        return NfcLookupResponse(
+            success=True,
+            spool_id=spool_id,
+            tag_format="tigertag",
+            tag_data=tag_response,
+            message="Spool found." if spool_id else "No matching spool found.",
+        )
+    except Exception:
+        logger.exception("Error in TigerTag lookup")
+        return NfcLookupResponse(success=False, tag_format="tigertag", message="Failed to decode TigerTag data.")
+
+
+async def _lookup_tigertag_by_id(db: AsyncSession, id_product: int) -> NfcLookupResponse:
+    """Handle TigerTag lookup by direct id_product."""
+    try:
+        from spoolman.tigertag_codec import TigerTagData  # noqa: PLC0415
+        from spoolman.tigertag_lookup import find_spool_by_tigertag  # noqa: PLC0415
+
+        tag_data = TigerTagData(id_product=id_product)
+        spool = await find_spool_by_tigertag(db, tag_data)
+        spool_id = spool.id if spool else None
+
+        return NfcLookupResponse(
+            success=True,
+            spool_id=spool_id,
+            tag_format="tigertag",
+            message="Spool found." if spool_id else "No matching spool found.",
+        )
+    except Exception:
+        logger.exception("Error in TigerTag ID lookup")
+        return NfcLookupResponse(success=False, tag_format="tigertag", message="Failed to look up TigerTag ID.")
+
+
+async def _lookup_openprinttag(
+    db: AsyncSession, raw_data: bytes, nfc_tag_uid_hex: str | None, auto_create: bool,
+) -> NfcLookupResponse:
+    """Handle OpenPrintTag lookup from raw NFC-V memory."""
+    try:
+        from spoolman.openprinttag_codec import decode_nfcv_memory  # noqa: PLC0415
+        from spoolman.openprinttag_lookup import create_spool_from_openprinttag, find_spool_by_openprinttag  # noqa: PLC0415
+
+        nfc_uid = bytes.fromhex(nfc_tag_uid_hex) if nfc_tag_uid_hex else None
+        tag_data = decode_nfcv_memory(raw_data, nfc_tag_uid=nfc_uid)
+
+        spool = await find_spool_by_openprinttag(db, tag_data)
+
+        if spool is None and auto_create:
+            spool = await create_spool_from_openprinttag(db, tag_data)
+            msg = f"Spool auto-created with ID {spool.id}."
+        elif spool is not None:
+            msg = "Spool found."
+        else:
+            msg = "No matching spool found."
+
+        spool_id = spool.id if spool else None
+
+        opt_response = OpenPrintTagDataResponse(
+            instance_uuid=tag_data.effective_instance_uuid,
+            package_uuid=tag_data.package_uuid,
+            brand_uuid=tag_data.effective_brand_uuid,
+            material_uuid=tag_data.material_uuid,
+            brand_name=tag_data.brand_name,
+            material_name=tag_data.material_name,
+            material_type=tag_data.material_type,
+            material_class=tag_data.material_class,
+            primary_color_hex=tag_data.primary_color_hex,
+            density=tag_data.density,
+            filament_diameter=tag_data.filament_diameter,
+            nominal_netto_full_weight=tag_data.nominal_netto_full_weight,
+            actual_netto_full_weight=tag_data.actual_netto_full_weight,
+            empty_container_weight=tag_data.empty_container_weight,
+            consumed_weight=tag_data.consumed_weight,
+            min_print_temperature=tag_data.min_print_temperature,
+            max_print_temperature=tag_data.max_print_temperature,
+            min_bed_temperature=tag_data.min_bed_temperature,
+            max_bed_temperature=tag_data.max_bed_temperature,
+            drying_temperature=tag_data.drying_temperature,
+            drying_time=tag_data.drying_time,
+        )
+
+        return NfcLookupResponse(
+            success=True,
+            spool_id=spool_id,
+            tag_format="openprinttag",
+            openprinttag_data=opt_response,
+            message=msg,
+        )
+    except Exception:
+        logger.exception("Error in OpenPrintTag lookup")
+        return NfcLookupResponse(success=False, tag_format="openprinttag", message="Failed to decode OpenPrintTag data.")
+
+
 class NfcCreateFromTagRequest(BaseModel):
     """Request body for creating a spool from decoded TigerTag data."""
 
