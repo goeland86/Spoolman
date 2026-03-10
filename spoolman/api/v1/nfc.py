@@ -599,6 +599,134 @@ async def _lookup_openprinttag(
         return NfcLookupResponse(success=False, tag_format="openprinttag", message="Failed to decode OpenPrintTag data.")
 
 
+class NfcBindRequest(BaseModel):
+    """Request body for binding an NFC tag to an existing spool."""
+
+    spool_id: int = Field(description="The spool ID to bind the tag to.")
+    raw_data_b64: Optional[str] = Field(default=None, description="Base64-encoded raw tag memory (NTAG213 pages 4-39).")
+    id_product: int = Field(default=0, description="TigerTag product ID (used with timestamp for manual binding).")
+    timestamp: int = Field(default=0, description="TigerTag timestamp (seconds since 2000-01-01).")
+    nfc_tag_uid: Optional[str] = Field(default=None, description="Hex-encoded NFC tag UID.")
+
+
+class NfcBindResponse(BaseModel):
+    """Response for NFC bind endpoint."""
+
+    success: bool
+    nfc_tag_id: Optional[str] = None
+    tag_data: Optional[TigerTagDataResponse] = None
+    message: str = ""
+
+
+@router.post(
+    "/bind",
+    name="Bind NFC tag to existing spool",
+    response_model=NfcBindResponse,
+)
+async def nfc_bind(
+    request: NfcBindRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> NfcBindResponse:
+    """Bind a scanned NFC tag to an existing spool.
+
+    Accepts either raw tag binary (decoded to extract id_product + timestamp)
+    or explicit id_product + timestamp fields. Creates a SpoolField with
+    key="nfc_tag_id" linking the tag to the spool.
+    """
+    try:
+        from sqlalchemy.orm import selectinload  # noqa: PLC0415
+
+        from spoolman.database.models import Spool, SpoolField  # noqa: PLC0415
+        from spoolman.tigertag_codec import TigerTagData, decode_ntag213  # noqa: PLC0415
+        from spoolman.tigertag_lookup import _make_nfc_tag_id, bind_spool_to_tigertag  # noqa: PLC0415
+
+        # Fetch the spool with extra fields loaded
+        stmt = (
+            select(Spool)
+            .options(
+                selectinload(Spool.filament).selectinload(Filament.vendor),
+                selectinload(Spool.extra),
+            )
+            .where(Spool.id == request.spool_id)
+        )
+        result = await db.execute(stmt)
+        spool = result.unique().scalar_one_or_none()
+        if spool is None:
+            return NfcBindResponse(success=False, message=f"Spool with ID {request.spool_id} not found.")
+
+        # Decode tag data from raw binary or use explicit fields
+        tag_response = None
+        if request.raw_data_b64:
+            try:
+                raw_data = base64.b64decode(request.raw_data_b64)
+            except Exception:
+                return NfcBindResponse(success=False, message="Invalid base64 in raw_data_b64.")
+            tag_data = decode_ntag213(raw_data)
+            tag_response = TigerTagDataResponse(
+                id_tigertag=tag_data.id_tigertag,
+                id_product=tag_data.id_product,
+                id_material=tag_data.id_material,
+                id_diameter=tag_data.id_diameter,
+                id_brand=tag_data.id_brand,
+                color_hex=tag_data.color_hex,
+                weight=tag_data.weight,
+                nozzle_temp=tag_data.nozzle_temp,
+                bed_temp=tag_data.bed_temp,
+                drying_temp=tag_data.drying_temp,
+                drying_duration=tag_data.drying_duration,
+                timestamp=tag_data.timestamp,
+                user_message=tag_data.user_message,
+                diameter_mm=tag_data.diameter_mm,
+            )
+        elif request.id_product > 0 and request.timestamp > 0:
+            tag_data = TigerTagData(id_product=request.id_product, timestamp=request.timestamp)
+        else:
+            return NfcBindResponse(
+                success=False,
+                message="Provide either raw_data_b64 or both id_product and timestamp.",
+            )
+
+        nfc_tag_id = _make_nfc_tag_id(tag_data)
+        if nfc_tag_id is None:
+            return NfcBindResponse(
+                success=False,
+                message="Tag does not have a usable product ID and timestamp for binding.",
+            )
+
+        # Check if another spool is already bound to this tag
+        existing_stmt = (
+            select(SpoolField)
+            .where(SpoolField.key == "nfc_tag_id")
+            .where(SpoolField.value == nfc_tag_id)
+        )
+        existing_result = await db.execute(existing_stmt)
+        existing_binding = existing_result.scalar_one_or_none()
+        if existing_binding and existing_binding.spool_id != request.spool_id:
+            return NfcBindResponse(
+                success=False,
+                message=f"This tag is already bound to spool {existing_binding.spool_id}.",
+            )
+
+        bound = await bind_spool_to_tigertag(db, spool, tag_data)
+        if bound:
+            return NfcBindResponse(
+                success=True,
+                nfc_tag_id=nfc_tag_id,
+                tag_data=tag_response,
+                message=f"Tag bound to spool {request.spool_id}.",
+            )
+        return NfcBindResponse(
+            success=True,
+            nfc_tag_id=nfc_tag_id,
+            tag_data=tag_response,
+            message=f"Spool {request.spool_id} is already bound to this tag.",
+        )
+
+    except Exception:
+        logger.exception("Error binding NFC tag to spool")
+        return NfcBindResponse(success=False, message="Failed to bind NFC tag to spool.")
+
+
 class NfcCreateFromTagRequest(BaseModel):
     """Request body for creating a spool from decoded TigerTag data."""
 

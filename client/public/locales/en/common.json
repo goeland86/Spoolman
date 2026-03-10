@@ -443,6 +443,15 @@
             "not_supported": "Web NFC is not supported in this browser. Use the Server mode with a connected reader.",
             "permission_denied": "NFC permission denied.",
             "encode_failed": "Failed to encode TigerTag data."
-        }
+        },
+        "bind_title": "Link NFC Tag to Spool",
+        "bind_button": "Link NFC Tag",
+        "bind_description": "Scan an existing NFC tag to link it to this spool. Future scans of this tag will automatically select this spool.",
+        "bind_confirm_description": "Tag scanned. Review the tag data below and confirm to link it to this spool.",
+        "bind_binding": "Linking...",
+        "bind_success": "Tag linked to spool successfully!",
+        "bind_error": "Failed to link tag to spool.",
+        "bind_scan_again": "Scan Again",
+        "bind_no_tigertag": "No TigerTag data found on this tag. Only TigerTag format is supported for linking."
     }
 }
