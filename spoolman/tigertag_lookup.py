@@ -3,6 +3,7 @@
 Provides functions to:
 - Find a Spoolman spool from decoded TigerTag data
 - Map a Spoolman spool/filament to TigerTag binary format
+- Bind a spool to a specific TigerTag via (id_product, timestamp) pair
 """
 
 import json
@@ -14,34 +15,107 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from spoolman.database.models import Filament, Spool, Vendor
+from spoolman.database.models import Filament, Spool, SpoolField, Vendor
 from spoolman.tigertag_codec import TigerTagData
 
 logger = logging.getLogger(__name__)
 
 
-async def find_spool_by_tigertag(db: AsyncSession, tag_data: TigerTagData) -> Optional[Spool]:
+def _make_nfc_tag_id(tag_data: TigerTagData) -> str | None:
+    """Build a spool-level NFC tag identifier from TigerTag data.
+
+    Uses (id_product, timestamp) as a composite key. Both tags on the same
+    spool share the same timestamp, so both sides resolve to the same spool.
+
+    Returns None if the tag doesn't have a usable timestamp.
+    """
+    if tag_data.id_product > 0 and tag_data.timestamp > 0:
+        return f"tigertag_{tag_data.id_product}_{tag_data.timestamp}"
+    return None
+
+
+async def bind_spool_to_tigertag(db: AsyncSession, spool: Spool, tag_data: TigerTagData) -> bool:
+    """Bind a spool to a specific TigerTag by storing the (id_product, timestamp) key.
+
+    Stores a SpoolField with key="nfc_tag_id" so future scans resolve to this
+    exact spool. Both sides of a spool produce the same key (shared timestamp).
+
+    Returns True if a new binding was created, False if already bound or no usable key.
+    """
+    nfc_tag_id = _make_nfc_tag_id(tag_data)
+    if nfc_tag_id is None:
+        return False
+
+    # Check if this spool already has a nfc_tag_id binding
+    for field in spool.extra:
+        if field.key == "nfc_tag_id":
+            if field.value == nfc_tag_id:
+                return False  # Already bound to this tag
+            # Spool is bound to a different tag — don't overwrite
+            logger.debug("Spool %d already bound to %s, not rebinding to %s", spool.id, field.value, nfc_tag_id)
+            return False
+
+    # Create the binding
+    db.add(SpoolField(spool_id=spool.id, key="nfc_tag_id", value=nfc_tag_id))
+    await db.flush()
+    logger.info("Bound spool %d to TigerTag %s", spool.id, nfc_tag_id)
+    return True
+
+
+async def find_spool_by_tigertag(
+    db: AsyncSession,
+    tag_data: TigerTagData,
+    auto_bind: bool = True,
+) -> Optional[Spool]:
     """Find a Spoolman spool matching decoded TigerTag data.
 
-    Matching strategy:
-    1. Match by external_id == "tigertag_{id_product}" on the filament table
-    2. Return the most recent non-archived spool for the matched filament
+    Matching strategies (tried in order):
+    1. Exact match by nfc_tag_id SpoolField == "tigertag_{id_product}_{timestamp}"
+       (identifies a specific spool, works for both sides of paired tags)
+    2. Fuzzy match by Filament.external_id == "tigertag_{id_product}"
+       (returns most recent non-archived spool for that filament)
+    3. Direct match by Spool.id == id_product (for tags written by Spoolman)
+
+    When auto_bind is True and a spool is found via strategy 2 or 3 (not yet
+    bound), the tag is automatically bound to that spool for future exact matches.
 
     Args:
         db: Database session.
         tag_data: Decoded TigerTag data.
+        auto_bind: Automatically bind unbound tags to matched spools.
 
     Returns:
         Optional[Spool]: The matched spool, or None if no match found.
 
     """
+    nfc_tag_id = _make_nfc_tag_id(tag_data)
+
     if tag_data.id_product > 0:
-        # Strategy 1: Match by external_id on filament
+        # Strategy 1: Exact match by nfc_tag_id on spool
+        if nfc_tag_id is not None:
+            stmt = (
+                select(Spool)
+                .join(Spool.extra)
+                .options(selectinload(Spool.filament).selectinload(Filament.vendor))
+                .where(SpoolField.key == "nfc_tag_id")
+                .where(SpoolField.value == nfc_tag_id)
+                .limit(1)
+            )
+            result = await db.execute(stmt)
+            spool = result.unique().scalar_one_or_none()
+            if spool is not None:
+                logger.debug("TigerTag exact match: spool %d via nfc_tag_id %s", spool.id, nfc_tag_id)
+                return spool
+
+        # Strategy 2: Match by external_id on filament
         external_id = f"tigertag_{tag_data.id_product}"
         stmt = (
             select(Spool)
             .join(Spool.filament)
-            .options(selectinload(Spool.filament).selectinload(Filament.vendor))
+            .options(
+                selectinload(Spool.filament).selectinload(Filament.vendor),
+                selectinload(Spool.extra),
+            )
             .where(Filament.external_id == external_id)
             .where(Spool.archived.is_(False))
             .order_by(Spool.registered.desc())
@@ -50,17 +124,24 @@ async def find_spool_by_tigertag(db: AsyncSession, tag_data: TigerTagData) -> Op
         result = await db.execute(stmt)
         spool = result.unique().scalar_one_or_none()
         if spool is not None:
+            if auto_bind:
+                await bind_spool_to_tigertag(db, spool, tag_data)
             return spool
 
-        # Strategy 2: Match by spool ID directly (for tags written by Spoolman)
+        # Strategy 3: Match by spool ID directly (for tags written by Spoolman)
         stmt = (
             select(Spool)
-            .options(selectinload(Spool.filament).selectinload(Filament.vendor))
+            .options(
+                selectinload(Spool.filament).selectinload(Filament.vendor),
+                selectinload(Spool.extra),
+            )
             .where(Spool.id == tag_data.id_product)
         )
         result = await db.execute(stmt)
         spool = result.unique().scalar_one_or_none()
         if spool is not None:
+            if auto_bind:
+                await bind_spool_to_tigertag(db, spool, tag_data)
             return spool
 
     return None

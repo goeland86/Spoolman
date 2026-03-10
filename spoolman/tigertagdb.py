@@ -17,6 +17,8 @@ from spoolman.externaldb import ExternalFilament
 logger = logging.getLogger(__name__)
 
 TIGERTAG_CACHE_FILE = "tigertag_filaments.json"
+TIGERTAG_BRANDS_CACHE_FILE = "tigertag_brands.json"
+TIGERTAG_MATERIALS_CACHE_FILE = "tigertag_materials.json"
 
 
 class TigerTagBrand(BaseModel):
@@ -120,6 +122,26 @@ async def _fetch_all_products(base_url: str) -> list[dict]:
     return all_items
 
 
+async def _fetch_brands(base_url: str) -> list[dict]:
+    """Fetch all brands from TigerTag API (GET, returns list with id/name)."""
+    url = urljoin(base_url, "brand/get/all")
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("items", data) if isinstance(data, dict) else data
+
+
+async def _fetch_materials(base_url: str) -> list[dict]:
+    """Fetch all filament materials from TigerTag API (GET, returns list with id/label/density)."""
+    url = urljoin(base_url, "material/get/all")
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("items", data) if isinstance(data, dict) else data
+
+
 async def _sync_tigertag() -> None:
     logger.info("Syncing TigerTag DB.")
 
@@ -147,10 +169,107 @@ async def _sync_tigertag() -> None:
     except Exception:
         logger.exception("Failed to sync TigerTag DB")
 
+    # Fetch and cache brands (id_brand -> name mapping)
+    try:
+        brands_list = await _fetch_brands(base_url)
+        filecache.update_file(TIGERTAG_BRANDS_CACHE_FILE, json.dumps(brands_list, ensure_ascii=False).encode("utf-8"))
+        logger.info("TigerTag brands synced: %d", len(brands_list))
+    except Exception:
+        logger.exception("Failed to sync TigerTag brands")
+
+    # Fetch and cache materials (id_type -> name mapping)
+    try:
+        materials_list = await _fetch_materials(base_url)
+        filecache.update_file(
+            TIGERTAG_MATERIALS_CACHE_FILE, json.dumps(materials_list, ensure_ascii=False).encode("utf-8"),
+        )
+        logger.info("TigerTag materials synced: %d", len(materials_list))
+    except Exception:
+        logger.exception("Failed to sync TigerTag materials")
+
 
 def get_tigertag_filaments_file():
     """Get the path to the cached TigerTag filaments file."""
     return filecache.get_file(TIGERTAG_CACHE_FILE)
+
+
+def lookup_brand_name(id_brand: int) -> Optional[str]:
+    """Look up a brand name by its TigerTag numeric ID from the cached brand list.
+
+    Brand API returns: [{"id": 19961, "name": "Rosa3D", "type_ids": [142]}, ...]
+    """
+    try:
+        data = json.loads(filecache.get_file_contents(TIGERTAG_BRANDS_CACHE_FILE))
+        for entry in data:
+            if entry.get("id") == id_brand:
+                return entry.get("name")
+    except Exception:
+        logger.debug("Could not look up TigerTag brand %d from cache", id_brand)
+    return None
+
+
+def lookup_material_name(id_material: int) -> Optional[str]:
+    """Look up a material name by its TigerTag numeric ID from the cached material list.
+
+    Material API returns: [{"id": 38219, "label": "PLA", "density": 1.24, ...}, ...]
+    """
+    try:
+        data = json.loads(filecache.get_file_contents(TIGERTAG_MATERIALS_CACHE_FILE))
+        for entry in data:
+            if entry.get("id") == id_material:
+                return entry.get("label")
+    except Exception:
+        logger.debug("Could not look up TigerTag material %d from cache", id_material)
+    return None
+
+
+def lookup_material_density(id_material: int) -> Optional[float]:
+    """Look up material density by its TigerTag numeric ID from the cached material list."""
+    try:
+        data = json.loads(filecache.get_file_contents(TIGERTAG_MATERIALS_CACHE_FILE))
+        for entry in data:
+            if entry.get("id") == id_material:
+                density = entry.get("density")
+                if density is not None:
+                    return float(density)
+    except Exception:
+        logger.debug("Could not look up TigerTag material density %d from cache", id_material)
+    return None
+
+
+async def lookup_product_by_tag(nfc_tag_uid: str, id_product: int) -> Optional[ExternalFilament]:
+    """Look up a TigerTag product via the real-time API using tag UID + product_id.
+
+    The tag stores a small product_id (e.g. 28) which is different from the API's
+    internal database ID (billions). The single-product endpoint requires both the
+    tag's hardware UID and the product_id to resolve to a full product record.
+
+    Returns an ExternalFilament if found, None otherwise.
+    """
+    if not is_tigertag_enabled():
+        return None
+
+    base_url = get_tigertag_api_url()
+    url = urljoin(base_url, "product/get")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params={"uid": nfc_tag_uid, "product_id": id_product}, timeout=5.0)
+            response.raise_for_status()
+            data = response.json()
+
+        product = TigerTagProduct(**data)
+        ext = _to_external_filament(product)
+        logger.info("TigerTag API resolved product_id=%d → %s (%s)", id_product, ext.name, ext.manufacturer)
+        return ext
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            logger.debug("TigerTag product_id=%d not found via API (uid=%s)", id_product, nfc_tag_uid)
+        else:
+            logger.warning("TigerTag API error for product_id=%d: %s", id_product, e)
+    except Exception:
+        logger.debug("TigerTag API lookup failed for product_id=%d", id_product, exc_info=True)
+    return None
 
 
 def schedule_tasks(scheduler: Scheduler) -> None:

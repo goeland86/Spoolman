@@ -48,6 +48,7 @@ class TigerTagDataResponse(BaseModel):
     bed_temp: int = 0
     drying_temp: int = 0
     drying_duration: int = 0
+    timestamp: int = 0
     user_message: str = ""
     diameter_mm: float = 0.0
 
@@ -146,6 +147,7 @@ async def nfc_read(
             bed_temp=tag_data.bed_temp,
             drying_temp=tag_data.drying_temp,
             drying_duration=tag_data.drying_duration,
+            timestamp=tag_data.timestamp,
             user_message=tag_data.user_message,
             diameter_mm=tag_data.diameter_mm,
         )
@@ -327,6 +329,109 @@ def _detect_tag_format(raw_data: bytes, tag_type: str | None) -> str:
     return "tigertag"
 
 
+async def _create_spool_from_tigertag(
+    db: AsyncSession, tag_data, nfc_tag_uid: str | None = None,
+) -> "Spool":
+    """Create a filament and spool from decoded TigerTag data.
+
+    Resolution order for filament data:
+    1. Existing filament with matching external_id
+    2. Real-time TigerTag API lookup (requires tag UID + product_id)
+    3. TigerTag product cache (by internal API id)
+    4. Brand/material name resolution from cached lookup tables
+    5. Fallback to raw tag data with generic name
+    """
+    from spoolman.database.models import SpoolField  # noqa: PLC0415
+    from spoolman.tigertag_lookup import _make_nfc_tag_id  # noqa: PLC0415
+
+    external_id = f"tigertag_{tag_data.id_product}" if tag_data.id_product > 0 else None
+
+    # Check for existing filament with this external_id
+    existing_filament = None
+    if external_id:
+        existing_filament = await _find_filament_by_external_id(db, external_id)
+
+    if existing_filament:
+        filament_id = existing_filament.id
+    else:
+        ext_filament = None
+
+        # Strategy 1: Real-time TigerTag API lookup (tag UID + product_id)
+        if nfc_tag_uid and tag_data.id_product > 0:
+            from spoolman.tigertagdb import lookup_product_by_tag  # noqa: PLC0415
+
+            ext_filament = await lookup_product_by_tag(nfc_tag_uid, tag_data.id_product)
+
+        # Strategy 2: Product cache (by internal API id)
+        if ext_filament is None and tag_data.id_product > 0:
+            ext_filament = _lookup_tigertag_product(tag_data.id_product)
+
+        if ext_filament:
+            vendor_id = await _find_or_create_vendor(db, ext_filament.manufacturer)
+            db_filament = await filament_db.create(
+                db=db,
+                density=ext_filament.density,
+                diameter=ext_filament.diameter,
+                name=ext_filament.name,
+                vendor_id=vendor_id,
+                material=ext_filament.material,
+                weight=ext_filament.weight,
+                color_hex=ext_filament.color_hex,
+                settings_extruder_temp=ext_filament.extruder_temp,
+                settings_bed_temp=ext_filament.bed_temp,
+                external_id=external_id,
+            )
+            filament_id = db_filament.id
+        else:
+            # Strategy 3: Resolve brand/material names from TigerTag API caches
+            from spoolman.tigertagdb import lookup_brand_name, lookup_material_density, lookup_material_name  # noqa: PLC0415
+
+            brand_name = lookup_brand_name(tag_data.id_brand) if tag_data.id_brand > 0 else None
+            material_name = lookup_material_name(tag_data.id_material) if tag_data.id_material > 0 else None
+            density = lookup_material_density(tag_data.id_material) if tag_data.id_material > 0 else None
+            diameter = tag_data.diameter_mm if tag_data.diameter_mm > 0 else 1.75
+
+            parts = []
+            if brand_name:
+                parts.append(brand_name)
+            if material_name:
+                parts.append(material_name)
+            if not parts:
+                parts.append(f"TigerTag {external_id or 'Unknown'}")
+            filament_name = " ".join(parts)
+
+            vendor_id = None
+            if brand_name:
+                vendor_id = await _find_or_create_vendor(db, brand_name)
+
+            db_filament = await filament_db.create(
+                db=db,
+                density=density or 1.24,
+                diameter=diameter,
+                name=filament_name,
+                vendor_id=vendor_id,
+                material=material_name,
+                weight=float(tag_data.weight) if tag_data.weight > 0 else None,
+                color_hex=tag_data.color_hex if tag_data.color_hex and tag_data.color_hex != "000000" else None,
+                settings_extruder_temp=tag_data.nozzle_temp if tag_data.nozzle_temp > 0 else None,
+                settings_bed_temp=tag_data.bed_temp if tag_data.bed_temp > 0 else None,
+                external_id=external_id,
+            )
+            filament_id = db_filament.id
+
+    # Create spool
+    db_spool = await spool_db.create(db=db, filament_id=filament_id)
+
+    # Bind the TigerTag to the spool
+    nfc_tag_id = _make_nfc_tag_id(tag_data)
+    if nfc_tag_id:
+        db.add(SpoolField(spool_id=db_spool.id, key="nfc_tag_id", value=nfc_tag_id))
+        await db.flush()
+        logger.info("Bound new spool %d to TigerTag %s", db_spool.id, nfc_tag_id)
+
+    return db_spool
+
+
 @router.post(
     "/lookup",
     name="Look up spool from NFC tag data",
@@ -361,10 +466,12 @@ async def nfc_lookup(
 
     if tag_format == "openprinttag":
         return await _lookup_openprinttag(db, raw_data, request.nfc_tag_uid, request.auto_create)
-    return await _lookup_tigertag(db, raw_data)
+    return await _lookup_tigertag(db, raw_data, request.nfc_tag_uid, request.auto_create)
 
 
-async def _lookup_tigertag(db: AsyncSession, raw_data: bytes) -> NfcLookupResponse:
+async def _lookup_tigertag(
+    db: AsyncSession, raw_data: bytes, nfc_tag_uid: str | None = None, auto_create: bool = False,
+) -> NfcLookupResponse:
     """Handle TigerTag lookup from raw binary data."""
     try:
         from spoolman.tigertag_codec import decode_ntag213  # noqa: PLC0415
@@ -372,6 +479,15 @@ async def _lookup_tigertag(db: AsyncSession, raw_data: bytes) -> NfcLookupRespon
 
         tag_data = decode_ntag213(raw_data)
         spool = await find_spool_by_tigertag(db, tag_data)
+
+        if spool is None and auto_create:
+            spool = await _create_spool_from_tigertag(db, tag_data, nfc_tag_uid=nfc_tag_uid)
+            msg = f"Spool auto-created with ID {spool.id}."
+        elif spool is not None:
+            msg = "Spool found."
+        else:
+            msg = "No matching spool found."
+
         spool_id = spool.id if spool else None
 
         tag_response = TigerTagDataResponse(
@@ -386,6 +502,7 @@ async def _lookup_tigertag(db: AsyncSession, raw_data: bytes) -> NfcLookupRespon
             bed_temp=tag_data.bed_temp,
             drying_temp=tag_data.drying_temp,
             drying_duration=tag_data.drying_duration,
+            timestamp=tag_data.timestamp,
             user_message=tag_data.user_message,
             diameter_mm=tag_data.diameter_mm,
         )
@@ -395,7 +512,7 @@ async def _lookup_tigertag(db: AsyncSession, raw_data: bytes) -> NfcLookupRespon
             spool_id=spool_id,
             tag_format="tigertag",
             tag_data=tag_response,
-            message="Spool found." if spool_id else "No matching spool found.",
+            message=msg,
         )
     except Exception:
         logger.exception("Error in TigerTag lookup")
@@ -487,15 +604,19 @@ class NfcCreateFromTagRequest(BaseModel):
 
     id_product: int = Field(default=0, description="TigerTag product ID.")
     id_material: int = Field(default=0, description="TigerTag material type ID.")
-    id_diameter: int = Field(default=0, description="TigerTag diameter ID (1=1.75mm, 2=2.85mm).")
+    id_diameter: int = Field(default=0, description="TigerTag diameter ID (56=1.75mm, 221=2.85mm).")
     id_brand: int = Field(default=0, description="TigerTag brand ID.")
     color_hex: str = Field(default="", description="Color hex string (without #).")
     weight: int = Field(default=0, description="Filament weight in grams.")
     nozzle_temp: int = Field(default=0, description="Nozzle temperature in °C.")
+    nozzle_temp_max: int = Field(default=0, description="Max nozzle temperature in °C.")
     bed_temp: int = Field(default=0, description="Bed temperature in °C.")
+    bed_temp_max: int = Field(default=0, description="Max bed temperature in °C.")
     drying_temp: int = Field(default=0, description="Drying temperature in °C.")
-    drying_duration: int = Field(default=0, description="Drying duration in minutes.")
+    drying_duration: int = Field(default=0, description="Drying duration in hours.")
     diameter_mm: float = Field(default=0.0, description="Diameter in mm (decoded from id_diameter).")
+    timestamp: int = Field(default=0, description="TigerTag timestamp (seconds since 2000-01-01, used for spool pairing).")
+    nfc_tag_uid: Optional[str] = Field(default=None, description="Hex-encoded NFC tag UID (for TigerTag API product lookup).")
 
 
 class NfcCreateFromTagResponse(BaseModel):
@@ -519,7 +640,7 @@ async def _find_filament_by_external_id(db, external_id: str) -> Optional[Filame
     """Find an existing filament by external_id."""
     stmt = select(Filament).where(Filament.external_id == external_id)
     result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+    return result.unique().scalar_one_or_none()
 
 
 def _lookup_tigertag_product(id_product: int):
@@ -552,65 +673,31 @@ async def nfc_create_from_tag(
     """Create a filament and spool from decoded TigerTag data.
 
     If the tag's id_product matches an entry in the TigerTag external DB cache,
-    rich filament data (name, material, vendor, etc.) is used. Otherwise, a minimal
-    filament is created from the raw tag fields.
+    rich filament data (name, material, vendor, etc.) is used. Otherwise,
+    brand/material names are resolved from their respective TigerTag API caches.
     """
     try:
-        external_id = f"tigertag_{request.id_product}" if request.id_product > 0 else None
+        from spoolman.tigertag_codec import TigerTagData  # noqa: PLC0415
 
-        # Step 1: Check for existing filament with this external_id
-        existing_filament = None
-        if external_id:
-            existing_filament = await _find_filament_by_external_id(db, external_id)
-
-        if existing_filament:
-            filament_id = existing_filament.id
-        else:
-            # Step 2: Try to look up rich data from TigerTag external DB cache
-            ext_filament = _lookup_tigertag_product(request.id_product) if request.id_product > 0 else None
-
-            if ext_filament:
-                # Create vendor if needed
-                vendor_id = await _find_or_create_vendor(db, ext_filament.manufacturer)
-
-                db_filament = await filament_db.create(
-                    db=db,
-                    density=ext_filament.density,
-                    diameter=ext_filament.diameter,
-                    name=ext_filament.name,
-                    vendor_id=vendor_id,
-                    material=ext_filament.material,
-                    weight=ext_filament.weight,
-                    color_hex=ext_filament.color_hex,
-                    settings_extruder_temp=ext_filament.extruder_temp,
-                    settings_bed_temp=ext_filament.bed_temp,
-                    external_id=external_id,
-                )
-                filament_id = db_filament.id
-            else:
-                # Step 3: Create minimal filament from raw tag data
-                diameter = request.diameter_mm if request.diameter_mm > 0 else (1.75 if request.id_diameter == 1 else 2.85 if request.id_diameter == 2 else 1.75)  # noqa: E501
-                color = request.color_hex if request.color_hex else None
-                weight = float(request.weight) if request.weight > 0 else None
-
-                db_filament = await filament_db.create(
-                    db=db,
-                    density=1.24,
-                    diameter=diameter,
-                    name=f"TigerTag {external_id or 'Unknown'}",
-                    weight=weight,
-                    color_hex=color,
-                    settings_extruder_temp=request.nozzle_temp if request.nozzle_temp > 0 else None,
-                    settings_bed_temp=request.bed_temp if request.bed_temp > 0 else None,
-                    external_id=external_id,
-                )
-                filament_id = db_filament.id
-
-        # Step 4: Create spool
-        db_spool = await spool_db.create(
-            db=db,
-            filament_id=filament_id,
+        # Build TigerTagData from the request fields
+        tag_data = TigerTagData(
+            id_product=request.id_product,
+            id_material=request.id_material,
+            id_diameter=request.id_diameter,
+            id_brand=request.id_brand,
+            weight=request.weight,
+            nozzle_temp=request.nozzle_temp,
+            nozzle_temp_max=request.nozzle_temp_max,
+            bed_temp=request.bed_temp,
+            bed_temp_max=request.bed_temp_max,
+            drying_temp=request.drying_temp,
+            drying_duration=request.drying_duration,
+            timestamp=request.timestamp,
         )
+        if request.color_hex:
+            tag_data.color_hex = request.color_hex
+
+        db_spool = await _create_spool_from_tigertag(db, tag_data, nfc_tag_uid=request.nfc_tag_uid)
 
         return NfcCreateFromTagResponse(
             success=True,
