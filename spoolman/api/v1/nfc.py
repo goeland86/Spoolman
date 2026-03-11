@@ -321,7 +321,7 @@ class NfcLookupResponse(BaseModel):
 
 def _detect_tag_format(raw_data: bytes, tag_type: str | None) -> str:
     """Auto-detect tag format from raw bytes, or use explicit tag_type."""
-    if tag_type in ("tigertag", "openprinttag"):
+    if tag_type in ("tigertag", "tigertag+", "openprinttag"):
         return tag_type
     # NFC-V capability container starts with 0xE1
     if len(raw_data) >= 1 and raw_data[0] == 0xE1:
@@ -474,7 +474,7 @@ async def _lookup_tigertag(
 ) -> NfcLookupResponse:
     """Handle TigerTag lookup from raw binary data."""
     try:
-        from spoolman.tigertag_codec import decode_ntag213  # noqa: PLC0415
+        from spoolman.tigertag_codec import TIGERTAG_PRO_V1, decode_ntag213  # noqa: PLC0415
         from spoolman.tigertag_lookup import find_spool_by_tigertag  # noqa: PLC0415
 
         tag_data = decode_ntag213(raw_data)
@@ -489,6 +489,9 @@ async def _lookup_tigertag(
             msg = "No matching spool found."
 
         spool_id = spool.id if spool else None
+
+        # Distinguish TigerTag Maker vs TigerTag+ in the response
+        detected_format = "tigertag+" if tag_data.id_tigertag == TIGERTAG_PRO_V1 else "tigertag"
 
         tag_response = TigerTagDataResponse(
             id_tigertag=tag_data.id_tigertag,
@@ -510,7 +513,7 @@ async def _lookup_tigertag(
         return NfcLookupResponse(
             success=True,
             spool_id=spool_id,
-            tag_format="tigertag",
+            tag_format=detected_format,
             tag_data=tag_response,
             message=msg,
         )

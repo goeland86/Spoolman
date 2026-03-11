@@ -9,8 +9,16 @@
 
 import { ISpool } from "../pages/spools/model";
 
-/** TigerTag Maker v1.0 magic number. */
+/** TigerTag Maker v1.0 magic number — offline only. */
 export const TIGERTAG_MAKER_V1 = 0x5c15e2e4;
+
+/** TigerTag+ v1.0 magic number — offline + cloud sync. */
+export const TIGERTAG_PRO_V1 = 0x12c4c408;
+
+/** Check if a magic number identifies a valid TigerTag (Maker or Pro/+). */
+export function isTigerTag(magic: number): boolean {
+  return magic === TIGERTAG_MAKER_V1 || magic === TIGERTAG_PRO_V1;
+}
 
 /** Seconds between Unix epoch (1970-01-01) and TigerTag epoch (2000-01-01). */
 export const TIGERTAG_EPOCH_OFFSET = 946684800;
