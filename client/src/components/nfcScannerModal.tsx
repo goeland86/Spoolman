@@ -4,7 +4,7 @@ import { Alert, Button, Descriptions, FloatButton, Modal, Segmented, Space, Spin
 import React, { useCallback, useState } from "react";
 import { useNavigate } from "react-router";
 import { TigerTagData, isWebNfcSupported, useNfcCreateFromTag, useNfcRead, useNfcStatus } from "../utils/nfc";
-import { decodeTigerTag, TIGERTAG_MAKER_V1 } from "../utils/tigertagCodec";
+import { decodeTigerTag, isTigerTag } from "../utils/tigertagCodec";
 
 const { Text } = Typography;
 
@@ -108,7 +108,7 @@ const NfcScannerModal: React.FC = () => {
           if (record.recordType === "tigertag.io:maker" && record.data) {
             try {
               const tagData = decodeTigerTag(record.data.buffer as ArrayBuffer);
-              if (tagData.id_tigertag === TIGERTAG_MAKER_V1 && tagData.id_product > 0) {
+              if (isTigerTag(tagData.id_tigertag) && tagData.id_product > 0) {
                 // Convert RGBA to hex string
                 const colorHex = [tagData.color_r, tagData.color_g, tagData.color_b]
                   .map((c) => c.toString(16).padStart(2, "0"))
