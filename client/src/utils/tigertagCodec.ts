@@ -9,11 +9,11 @@
 
 import { ISpool } from "../pages/spools/model";
 
-/** TigerTag Maker v1.0 magic number — offline only. */
-export const TIGERTAG_MAKER_V1 = 0x5c15e2e4;
+/** TigerTag Maker v1.0 magic number (from id_version.json API — the README hex values are incorrect). */
+export const TIGERTAG_MAKER_V1 = 0x5bf59264;
 
 /** TigerTag+ v1.0 magic number — offline + cloud sync. */
-export const TIGERTAG_PRO_V1 = 0x12c4c408;
+export const TIGERTAG_PRO_V1 = 0xbc0fcb97;
 
 /** Check if a magic number identifies a valid TigerTag (Maker or Pro/+). */
 export function isTigerTag(magic: number): boolean {

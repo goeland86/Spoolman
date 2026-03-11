@@ -432,7 +432,7 @@
             "disconnected": "Disconnected",
             "disabled": "Disabled"
         },
-        "browser_ndef_warning": "Browser NFC writes use NDEF format, which wraps TigerTag data in an NDEF record. For raw NTAG213 page writes, use the Download Raw Binary option with an external NFC tool.",
+        "browser_ndef_warning": "Warning: Browser NFC writes use NDEF format. Tags written this way will NOT be recognized by the TigerTag app, which expects raw binary on pages 4-39. Use Server mode for TigerTag-compatible writes, or Download Raw Binary for use with an external NFC tool.",
         "download_raw_binary": "Download Raw Binary",
         "download_success": "Binary file downloaded successfully.",
         "browser_write_success": "TigerTag data written to NFC tag via NDEF.",

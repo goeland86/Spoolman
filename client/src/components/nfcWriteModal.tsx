@@ -235,7 +235,7 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
 
         {mode === "browser" && (
           <>
-            <Alert type="info" message={t("nfc.browser_ndef_warning")} showIcon />
+            <Alert type="warning" message={t("nfc.browser_ndef_warning")} showIcon />
             <Button
               icon={<DownloadOutlined />}
               onClick={handleDownloadBinary}
