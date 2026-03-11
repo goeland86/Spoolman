@@ -3,7 +3,7 @@ import { useTranslate } from "@refinedev/core";
 import { Alert, Button, Descriptions, Modal, Segmented, Space, Spin, Typography } from "antd";
 import React, { useCallback, useState } from "react";
 import { TigerTagData, isWebNfcSupported, useNfcBind, useNfcRead, useNfcStatus } from "../utils/nfc";
-import { decodeTigerTag, TIGERTAG_MAKER_V1 } from "../utils/tigertagCodec";
+import { decodeTigerTag, isTigerTag } from "../utils/tigertagCodec";
 import { ISpool } from "../pages/spools/model";
 
 const { Text } = Typography;
@@ -129,7 +129,7 @@ const NfcBindModal: React.FC<NfcBindModalProps> = ({ spool, visible, onClose, on
           if (record.recordType === "tigertag.io:maker" && record.data) {
             try {
               const tagData = decodeTigerTag(record.data.buffer as ArrayBuffer);
-              if (tagData.id_tigertag === TIGERTAG_MAKER_V1 && tagData.id_product > 0) {
+              if (isTigerTag(tagData.id_tigertag) && tagData.id_product > 0) {
                 const colorHex = [tagData.color_r, tagData.color_g, tagData.color_b]
                   .map((c) => c.toString(16).padStart(2, "0"))
                   .join("");

@@ -169,7 +169,7 @@ def map_spool_to_tigertag(
     data = TigerTagData()
 
     # TigerTag Maker v1.0 magic number and type
-    data.id_tigertag = 0x5C15E2E4
+    data.id_tigertag = 0x5BF59264  # TigerTag Maker V1
     data.id_type = 142  # Filament
 
     # Set product ID: use TigerTag product ID if available, otherwise use spool ID

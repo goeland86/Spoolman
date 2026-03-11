@@ -16,8 +16,18 @@ logger = logging.getLogger(__name__)
 # NTAG213 has 144 bytes of user memory (pages 4-39, 36 pages x 4 bytes)
 NTAG213_USER_BYTES = 144
 
-# TigerTag Maker v1.0 magic number
-TIGERTAG_MAKER_V1 = 0x5C15E2E4
+# TigerTag magic numbers (from id_version.json API database — the README hex values are incorrect)
+TIGERTAG_MAKER_V1 = 0x5BF59264  # TigerTag Maker v1.0 — offline only (decimal 1542820452)
+TIGERTAG_PRO_V1 = 0xBC0FCB97  # TigerTag+ v1.0 — offline + cloud sync (decimal 3155151767)
+TIGERTAG_INIT = 0x6C41A2E1  # TigerTag Init — blank/uninitialized (decimal 1816240865)
+
+# All valid TigerTag magic numbers (for detection)
+TIGERTAG_MAGIC_NUMBERS = {TIGERTAG_MAKER_V1, TIGERTAG_PRO_V1}
+
+
+def is_tigertag(magic: int) -> bool:
+    """Check if a magic number identifies a valid TigerTag (Maker or Pro/+)."""
+    return magic in TIGERTAG_MAGIC_NUMBERS
 
 
 @dataclass
