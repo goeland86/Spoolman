@@ -6,11 +6,15 @@ PN532/RC522 USB/UART and ACR122U NFC readers on Raspberry Pi and similar.
 
 import logging
 import threading
+import time
 from typing import Optional
 
 from spoolman.env import get_nfc_device_path, get_nfc_reader_type
 
 logger = logging.getLogger(__name__)
+
+# Minimum seconds between reconnection attempts
+_RECONNECT_COOLDOWN = 10.0
 
 
 class NfcService:
@@ -21,16 +25,30 @@ class NfcService:
         self._lock = threading.Lock()
         self._initialized = False
         self._status = "not_initialized"
+        self._last_reconnect_attempt: float = 0
 
     def initialize(self) -> None:
         """Initialize the NFC reader. Call once at startup."""
+        self._try_connect()
+
+    def _try_connect(self) -> bool:
+        """Attempt to open the NFC reader. Returns True on success."""
         reader_type = get_nfc_reader_type()
         device_path = get_nfc_device_path()
 
         if reader_type != "nfcpy":
             logger.warning("Unsupported NFC reader type: %s. Only 'nfcpy' is supported.", reader_type)
             self._status = "unsupported_reader"
-            return
+            return False
+
+        # Close any stale handle before reconnecting
+        if self._clf is not None:
+            try:
+                self._clf.close()
+            except Exception:
+                pass
+            self._clf = None
+            self._initialized = False
 
         try:
             import nfc  # noqa: PLC0415
@@ -40,23 +58,47 @@ class NfcService:
             self._initialized = True
             self._status = "connected"
             logger.info("NFC reader initialized successfully on %s", path)
+            return True
         except ImportError:
             logger.warning(
                 "nfcpy is not installed. Install it with: pip install nfcpy. "
                 "NFC features will be unavailable.",
             )
             self._status = "nfcpy_not_installed"
+            return False
         except Exception:
             logger.exception("Failed to initialize NFC reader")
+            self._initialized = False
             self._status = "error"
+            return False
+
+    def _ensure_connected(self) -> bool:
+        """Reconnect if the reader is in an error/disconnected state.
+
+        Rate-limited to avoid hammering USB on every request.
+        """
+        if self._initialized and self._clf is not None:
+            return True
+
+        now = time.monotonic()
+        if now - self._last_reconnect_attempt < _RECONNECT_COOLDOWN:
+            return False
+
+        self._last_reconnect_attempt = now
+        logger.info("NFC reader not connected, attempting reconnect...")
+        return self._try_connect()
 
     def get_status(self) -> str:
         """Get the current status of the NFC reader.
+
+        Attempts a reconnect if currently in an error state.
 
         Returns:
             str: Status string ('connected', 'not_initialized', 'error', etc.)
 
         """
+        if self._status in ("error", "not_initialized"):
+            self._ensure_connected()
         return self._status
 
     def read_tag(self, timeout: float = 10.0) -> Optional[bytes]:
@@ -71,8 +113,8 @@ class NfcService:
             Optional[bytes]: Raw tag data (144 bytes), or None if no tag found.
 
         """
-        if not self._initialized or self._clf is None:
-            logger.warning("NFC reader not initialized")
+        if not self._ensure_connected():
+            logger.warning("NFC reader not available")
             return None
 
         with self._lock:
@@ -105,6 +147,12 @@ class NfcService:
 
                 return bytes(data[:144])
 
+            except OSError:
+                logger.warning("NFC reader disconnected during read, marking for reconnect")
+                self._initialized = False
+                self._clf = None
+                self._status = "error"
+                return None
             except Exception:
                 logger.exception("Failed to read NFC tag")
                 return None
@@ -122,8 +170,8 @@ class NfcService:
             bool: True if write was successful, False otherwise.
 
         """
-        if not self._initialized or self._clf is None:
-            logger.warning("NFC reader not initialized")
+        if not self._ensure_connected():
+            logger.warning("NFC reader not available")
             return False
 
         if len(data) != 144:
@@ -157,6 +205,12 @@ class NfcService:
 
                 return True
 
+            except OSError:
+                logger.warning("NFC reader disconnected during write, marking for reconnect")
+                self._initialized = False
+                self._clf = None
+                self._status = "error"
+                return False
             except Exception:
                 logger.exception("Failed to write NFC tag")
                 return False
