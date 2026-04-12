@@ -21,6 +21,19 @@ export interface TigerTagData {
   diameter_mm: number;
 }
 
+/**
+ * Qidi tag data decoded from a MIFARE Classic tag.
+ */
+export interface QidiTagData {
+  material_code: number;
+  color_code: number;
+  manufacturer_code: number;
+  material_name: string;
+  material_type: string;
+  color_name: string;
+  color_hex: string;
+}
+
 export interface NfcStatusResponse {
   enabled: boolean;
   status: string;
@@ -28,19 +41,24 @@ export interface NfcStatusResponse {
 
 export interface NfcReadResponse {
   success: boolean;
+  tag_format?: string;
   tag_data?: TigerTagData;
+  qidi_data?: QidiTagData;
   spool_id?: number;
+  nfc_tag_uid?: string;
   raw_data_b64?: string;
   message: string;
 }
 
 export interface NfcWriteRequest {
   spool_id: number;
+  tag_format?: string;
   user_message?: string;
 }
 
 export interface NfcWriteResponse {
   success: boolean;
+  nfc_tag_uid?: string;
   message: string;
 }
 
@@ -118,6 +136,7 @@ export function useNfcEncode() {
 export interface NfcBindRequest {
   spool_id: number;
   raw_data_b64?: string;
+  tag_type?: string;
   id_product?: number;
   timestamp?: number;
   nfc_tag_uid?: string;
@@ -127,6 +146,7 @@ export interface NfcBindResponse {
   success: boolean;
   nfc_tag_id?: string;
   tag_data?: TigerTagData;
+  qidi_data?: QidiTagData;
   message: string;
 }
 
@@ -147,6 +167,8 @@ export function useNfcBind() {
 }
 
 export interface NfcCreateFromTagRequest {
+  tag_type?: string;
+  // TigerTag fields
   id_product?: number;
   id_material?: number;
   id_diameter?: number;
@@ -158,6 +180,11 @@ export interface NfcCreateFromTagRequest {
   drying_temp?: number;
   drying_duration?: number;
   diameter_mm?: number;
+  // Qidi fields
+  material_code?: number;
+  color_code?: number;
+  // Common
+  nfc_tag_uid?: string;
 }
 
 export interface NfcCreateFromTagResponse {

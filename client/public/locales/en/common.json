@@ -421,7 +421,7 @@
         "mode_browser": "Browser",
         "mode_server": "Server",
         "unsupported": "NFC is not supported in this browser.",
-        "place_tag": "Place NTAG213 tag on reader...",
+        "place_tag": "Place tag on reader...",
         "reading": "Reading tag...",
         "writing": "Writing tag...",
         "user_message": "User Message",
@@ -452,6 +452,11 @@
         "bind_success": "Tag linked to spool successfully!",
         "bind_error": "Failed to link tag to spool.",
         "bind_scan_again": "Scan Again",
-        "bind_no_tigertag": "No TigerTag data found on this tag. Only TigerTag format is supported for linking."
+        "bind_no_tigertag": "No TigerTag data found on this tag. Only TigerTag format is supported for linking.",
+        "tag_format": "Tag Format",
+        "tag_format_label": "Tag Format",
+        "tag_material": "Material",
+        "tag_material_type": "Material Type",
+        "qidi_write_info": "Qidi tags store only material and color. The tag will be written with the closest matching Qidi material and color codes."
     }
 }

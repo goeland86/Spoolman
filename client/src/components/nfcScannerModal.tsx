@@ -3,7 +3,7 @@ import { useTranslate } from "@refinedev/core";
 import { Alert, Button, Descriptions, FloatButton, Modal, Segmented, Space, Spin, Typography } from "antd";
 import React, { useCallback, useState } from "react";
 import { useNavigate } from "react-router";
-import { TigerTagData, isWebNfcSupported, useNfcCreateFromTag, useNfcRead, useNfcStatus } from "../utils/nfc";
+import { QidiTagData, TigerTagData, isWebNfcSupported, useNfcCreateFromTag, useNfcRead, useNfcStatus } from "../utils/nfc";
 import { decodeTigerTag, isTigerTag } from "../utils/tigertagCodec";
 
 const { Text } = Typography;
@@ -57,12 +57,46 @@ const TagDataSummary: React.FC<{ tagData: TigerTagData; t: (key: string) => stri
   );
 };
 
+/**
+ * Renders decoded Qidi tag data as a compact Descriptions panel.
+ */
+const QidiTagDataSummary: React.FC<{ qidiData: QidiTagData; t: (key: string) => string }> = ({ qidiData, t }) => (
+  <Descriptions column={2} size="small" bordered>
+    <Descriptions.Item label={t("nfc.tag_format")}>Qidi</Descriptions.Item>
+    <Descriptions.Item label={t("nfc.tag_material")}>{qidiData.material_name}</Descriptions.Item>
+    <Descriptions.Item label={t("nfc.tag_color")}>
+      {qidiData.color_hex ? (
+        <Space>
+          <span
+            style={{
+              display: "inline-block",
+              width: 16,
+              height: 16,
+              borderRadius: 3,
+              backgroundColor: `#${qidiData.color_hex}`,
+              border: "1px solid #d9d9d9",
+              verticalAlign: "middle",
+            }}
+          />
+          {qidiData.color_name}
+        </Space>
+      ) : (
+        "—"
+      )}
+    </Descriptions.Item>
+    <Descriptions.Item label={t("nfc.tag_material_type")}>{qidiData.material_type}</Descriptions.Item>
+  </Descriptions>
+);
+
 const NfcScannerModal: React.FC = () => {
   const [visible, setVisible] = useState(false);
   const [mode, setMode] = useState<"browser" | "server">("server");
   const [browserScanning, setBrowserScanning] = useState(false);
   const [browserError, setBrowserError] = useState<string | null>(null);
   const [unmatchedTagData, setUnmatchedTagData] = useState<TigerTagData | null>(null);
+  const [unmatchedQidiData, setUnmatchedQidiData] = useState<QidiTagData | null>(null);
+  const [unmatchedTagUid, setUnmatchedTagUid] = useState<string | null>(null);
+  const [unmatchedTagFormat, setUnmatchedTagFormat] = useState<string | null>(null);
   const t = useTranslate();
   const navigate = useNavigate();
 
@@ -75,12 +109,21 @@ const NfcScannerModal: React.FC = () => {
 
   const handleServerRead = useCallback(async () => {
     setUnmatchedTagData(null);
+    setUnmatchedQidiData(null);
+    setUnmatchedTagUid(null);
+    setUnmatchedTagFormat(null);
     const result = await nfcReadMutation.mutateAsync();
     if (result.success && result.spool_id) {
       setVisible(false);
       navigate(`/spool/show/${result.spool_id}`);
-    } else if (result.success && result.tag_data && !result.spool_id) {
-      setUnmatchedTagData(result.tag_data);
+    } else if (result.success && !result.spool_id) {
+      setUnmatchedTagFormat(result.tag_format || null);
+      setUnmatchedTagUid(result.nfc_tag_uid || null);
+      if (result.qidi_data) {
+        setUnmatchedQidiData(result.qidi_data);
+      } else if (result.tag_data) {
+        setUnmatchedTagData(result.tag_data);
+      }
     }
   }, [nfcReadMutation, navigate]);
 
@@ -182,28 +225,41 @@ const NfcScannerModal: React.FC = () => {
   }, [t, navigate]);
 
   const handleCreateFromTag = useCallback(async () => {
-    if (!unmatchedTagData) return;
+    if (!unmatchedTagData && !unmatchedQidiData) return;
 
-    const result = await createFromTagMutation.mutateAsync({
-      id_product: unmatchedTagData.id_product,
-      id_material: unmatchedTagData.id_material,
-      id_diameter: unmatchedTagData.id_diameter,
-      id_brand: unmatchedTagData.id_brand,
-      color_hex: unmatchedTagData.color_hex,
-      weight: unmatchedTagData.weight,
-      nozzle_temp: unmatchedTagData.nozzle_temp,
-      bed_temp: unmatchedTagData.bed_temp,
-      drying_temp: unmatchedTagData.drying_temp,
-      drying_duration: unmatchedTagData.drying_duration,
-      diameter_mm: unmatchedTagData.diameter_mm,
-    });
+    let result;
+    if (unmatchedQidiData && unmatchedTagFormat === "qidi") {
+      result = await createFromTagMutation.mutateAsync({
+        tag_type: "qidi",
+        material_code: unmatchedQidiData.material_code,
+        color_code: unmatchedQidiData.color_code,
+        nfc_tag_uid: unmatchedTagUid || undefined,
+      });
+    } else if (unmatchedTagData) {
+      result = await createFromTagMutation.mutateAsync({
+        id_product: unmatchedTagData.id_product,
+        id_material: unmatchedTagData.id_material,
+        id_diameter: unmatchedTagData.id_diameter,
+        id_brand: unmatchedTagData.id_brand,
+        color_hex: unmatchedTagData.color_hex,
+        weight: unmatchedTagData.weight,
+        nozzle_temp: unmatchedTagData.nozzle_temp,
+        bed_temp: unmatchedTagData.bed_temp,
+        drying_temp: unmatchedTagData.drying_temp,
+        drying_duration: unmatchedTagData.drying_duration,
+        diameter_mm: unmatchedTagData.diameter_mm,
+      });
+    } else {
+      return;
+    }
 
     if (result.success && result.spool_id) {
       setVisible(false);
       setUnmatchedTagData(null);
+      setUnmatchedQidiData(null);
       navigate(`/spool/show/${result.spool_id}`);
     }
-  }, [unmatchedTagData, createFromTagMutation, navigate]);
+  }, [unmatchedTagData, unmatchedQidiData, unmatchedTagFormat, unmatchedTagUid, createFromTagMutation, navigate]);
 
   // Don't show the button if neither server NFC nor Web NFC is available
   if (!serverEnabled && !webNfcAvailable) {
@@ -227,6 +283,9 @@ const NfcScannerModal: React.FC = () => {
           setBrowserScanning(false);
           setBrowserError(null);
           setUnmatchedTagData(null);
+          setUnmatchedQidiData(null);
+          setUnmatchedTagUid(null);
+          setUnmatchedTagFormat(null);
         }}
         footer={null}
         title={t("nfc.scan_title")}
@@ -285,10 +344,14 @@ const NfcScannerModal: React.FC = () => {
           )}
 
           {/* Show tag data and create button when no spool matched */}
-          {unmatchedTagData && (
+          {(unmatchedTagData || unmatchedQidiData) && (
             <Space direction="vertical" style={{ width: "100%" }} size="middle">
               <Alert type="info" message={t("nfc.create_from_tag_description")} showIcon />
-              <TagDataSummary tagData={unmatchedTagData} t={t} />
+              {unmatchedQidiData ? (
+                <QidiTagDataSummary qidiData={unmatchedQidiData} t={t} />
+              ) : unmatchedTagData ? (
+                <TagDataSummary tagData={unmatchedTagData} t={t} />
+              ) : null}
               <Button
                 type="primary"
                 onClick={handleCreateFromTag}

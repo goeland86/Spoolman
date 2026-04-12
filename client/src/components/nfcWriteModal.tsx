@@ -16,6 +16,7 @@ interface NfcWriteModalProps {
 
 const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }) => {
   const [modeOverride, setModeOverride] = useState<"browser" | "server" | null>(null);
+  const [tagFormat, setTagFormat] = useState<"tigertag" | "qidi">("tigertag");
   const [userMessage, setUserMessage] = useState("");
   const [browserWriting, setBrowserWriting] = useState(false);
   const [browserResult, setBrowserResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -37,9 +38,10 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
 
     await nfcWriteMutation.mutateAsync({
       spool_id: spool.id,
-      user_message: userMessage,
+      tag_format: tagFormat,
+      user_message: tagFormat === "tigertag" ? userMessage : undefined,
     });
-  }, [spool, userMessage, nfcWriteMutation]);
+  }, [spool, userMessage, tagFormat, nfcWriteMutation]);
 
   const handleBrowserWrite = useCallback(async () => {
     if (!spool || !window.NDEFReader) {
@@ -128,6 +130,7 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
         setBrowserResult(null);
         setUserMessage("");
         setModeOverride(null);
+        setTagFormat("tigertag");
       }}
       okText={nfcWriteMutation.isPending || browserWriting ? t("nfc.writing") : t("nfc.encode_button")}
       okButtonProps={{ loading: nfcWriteMutation.isPending || browserWriting, disabled: !canWrite }}
@@ -143,6 +146,22 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
           value={mode}
           onChange={(value) => setModeOverride(value as "browser" | "server")}
         />
+
+        {mode === "server" && (
+          <div>
+            <Text>{t("nfc.tag_format_label")}</Text>
+            <Segmented
+              block
+              options={[
+                { label: "TigerTag (NTAG213)", value: "tigertag" },
+                { label: "Qidi (MIFARE Classic)", value: "qidi" },
+              ]}
+              value={tagFormat}
+              onChange={(value) => setTagFormat(value as "tigertag" | "qidi")}
+              style={{ marginTop: 4 }}
+            />
+          </div>
+        )}
 
         {filament && (
           <>
@@ -191,15 +210,21 @@ const NfcWriteModal: React.FC<NfcWriteModalProps> = ({ spool, visible, onClose }
           </>
         )}
 
-        <div>
-          <Text>{t("nfc.user_message")}</Text>
-          <Input
-            value={userMessage}
-            onChange={(e) => setUserMessage(e.target.value.slice(0, 28))}
-            maxLength={28}
-            placeholder={t("nfc.user_message_help")}
-          />
-        </div>
+        {tagFormat === "tigertag" && (
+          <div>
+            <Text>{t("nfc.user_message")}</Text>
+            <Input
+              value={userMessage}
+              onChange={(e) => setUserMessage(e.target.value.slice(0, 28))}
+              maxLength={28}
+              placeholder={t("nfc.user_message_help")}
+            />
+          </div>
+        )}
+
+        {tagFormat === "qidi" && mode === "server" && (
+          <Alert type="info" message={t("nfc.qidi_write_info")} showIcon />
+        )}
 
         {mode === "server" && (nfcWriteMutation.isPending || browserWriting) && (
           <Spin tip={t("nfc.place_tag")}>

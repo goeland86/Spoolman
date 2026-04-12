@@ -2,7 +2,7 @@ import { LinkOutlined } from "@ant-design/icons";
 import { useTranslate } from "@refinedev/core";
 import { Alert, Button, Descriptions, Modal, Segmented, Space, Spin, Typography } from "antd";
 import React, { useCallback, useState } from "react";
-import { TigerTagData, isWebNfcSupported, useNfcBind, useNfcRead, useNfcStatus } from "../utils/nfc";
+import { QidiTagData, TigerTagData, isWebNfcSupported, useNfcBind, useNfcRead, useNfcStatus } from "../utils/nfc";
 import { decodeTigerTag, isTigerTag } from "../utils/tigertagCodec";
 import { ISpool } from "../pages/spools/model";
 
@@ -64,12 +64,46 @@ const TagDataSummary: React.FC<{ tagData: TigerTagData; t: (key: string) => stri
   );
 };
 
+/**
+ * Renders decoded Qidi tag data as a compact Descriptions panel.
+ */
+const QidiTagDataSummary: React.FC<{ qidiData: QidiTagData; t: (key: string) => string }> = ({ qidiData, t }) => (
+  <Descriptions column={2} size="small" bordered>
+    <Descriptions.Item label={t("nfc.tag_format")}>Qidi</Descriptions.Item>
+    <Descriptions.Item label={t("nfc.tag_material")}>{qidiData.material_name}</Descriptions.Item>
+    <Descriptions.Item label={t("nfc.tag_color")}>
+      {qidiData.color_hex ? (
+        <Space>
+          <span
+            style={{
+              display: "inline-block",
+              width: 16,
+              height: 16,
+              borderRadius: 3,
+              backgroundColor: `#${qidiData.color_hex}`,
+              border: "1px solid #d9d9d9",
+              verticalAlign: "middle",
+            }}
+          />
+          {qidiData.color_name}
+        </Space>
+      ) : (
+        "—"
+      )}
+    </Descriptions.Item>
+    <Descriptions.Item label={t("nfc.tag_material_type")}>{qidiData.material_type}</Descriptions.Item>
+  </Descriptions>
+);
+
 const NfcBindModal: React.FC<NfcBindModalProps> = ({ spool, visible, onClose, onBound }) => {
   const [mode, setMode] = useState<"browser" | "server">("server");
   const [browserScanning, setBrowserScanning] = useState(false);
   const [browserError, setBrowserError] = useState<string | null>(null);
   const [scannedTagData, setScannedTagData] = useState<TigerTagData | null>(null);
+  const [scannedQidiData, setScannedQidiData] = useState<QidiTagData | null>(null);
   const [scannedRawB64, setScannedRawB64] = useState<string | null>(null);
+  const [scannedTagUid, setScannedTagUid] = useState<string | null>(null);
+  const [scannedTagFormat, setScannedTagFormat] = useState<string | null>(null);
   const t = useTranslate();
 
   const nfcStatus = useNfcStatus();
@@ -79,11 +113,16 @@ const NfcBindModal: React.FC<NfcBindModalProps> = ({ spool, visible, onClose, on
   const serverEnabled = nfcStatus.data?.enabled === true && nfcStatus.data?.status === "connected";
   const webNfcAvailable = isWebNfcSupported();
 
+  const hasScannedTag = scannedTagData !== null || scannedQidiData !== null;
+
   const resetState = useCallback(() => {
     setBrowserScanning(false);
     setBrowserError(null);
     setScannedTagData(null);
+    setScannedQidiData(null);
     setScannedRawB64(null);
+    setScannedTagUid(null);
+    setScannedTagFormat(null);
     bindMutation.reset();
     nfcReadMutation.reset();
   }, [bindMutation, nfcReadMutation]);
@@ -95,13 +134,22 @@ const NfcBindModal: React.FC<NfcBindModalProps> = ({ spool, visible, onClose, on
 
   const handleServerRead = useCallback(async () => {
     setScannedTagData(null);
+    setScannedQidiData(null);
     setScannedRawB64(null);
+    setScannedTagUid(null);
+    setScannedTagFormat(null);
     bindMutation.reset();
 
     const result = await nfcReadMutation.mutateAsync();
-    if (result.success && result.tag_data) {
-      setScannedTagData(result.tag_data);
+    if (result.success) {
+      setScannedTagFormat(result.tag_format || null);
+      setScannedTagUid(result.nfc_tag_uid || null);
       setScannedRawB64(result.raw_data_b64 || null);
+      if (result.qidi_data) {
+        setScannedQidiData(result.qidi_data);
+      } else if (result.tag_data) {
+        setScannedTagData(result.tag_data);
+      }
     }
   }, [nfcReadMutation, bindMutation]);
 
@@ -185,25 +233,34 @@ const NfcBindModal: React.FC<NfcBindModalProps> = ({ spool, visible, onClose, on
   }, [t, bindMutation]);
 
   const handleBind = useCallback(async () => {
-    if (!spool || !scannedTagData) return;
+    if (!spool || !hasScannedTag) return;
 
-    const request: { spool_id: number; raw_data_b64?: string; id_product?: number; timestamp?: number } = {
-      spool_id: spool.id,
-    };
-
-    if (scannedRawB64) {
-      request.raw_data_b64 = scannedRawB64;
-    } else {
-      // Browser scan decoded the tag — send id_product + timestamp
-      request.id_product = scannedTagData.id_product;
-      request.timestamp = scannedTagData.timestamp || 0;
+    if (scannedTagFormat === "qidi" && scannedTagUid) {
+      // Qidi binding: use UID
+      await bindMutation.mutateAsync({
+        spool_id: spool.id,
+        tag_type: "qidi",
+        nfc_tag_uid: scannedTagUid,
+        raw_data_b64: scannedRawB64 || undefined,
+      });
+    } else if (scannedTagData) {
+      // TigerTag binding
+      const request: { spool_id: number; raw_data_b64?: string; id_product?: number; timestamp?: number } = {
+        spool_id: spool.id,
+      };
+      if (scannedRawB64) {
+        request.raw_data_b64 = scannedRawB64;
+      } else {
+        request.id_product = scannedTagData.id_product;
+        request.timestamp = scannedTagData.timestamp || 0;
+      }
+      await bindMutation.mutateAsync(request);
     }
 
-    await bindMutation.mutateAsync(request);
     if (onBound) {
       onBound();
     }
-  }, [spool, scannedTagData, scannedRawB64, bindMutation, onBound]);
+  }, [spool, hasScannedTag, scannedTagFormat, scannedTagUid, scannedTagData, scannedRawB64, bindMutation, onBound]);
 
   return (
     <Modal
@@ -230,7 +287,7 @@ const NfcBindModal: React.FC<NfcBindModalProps> = ({ spool, visible, onClose, on
         />
 
         {/* Step 1: Scan */}
-        {!scannedTagData && (
+        {!hasScannedTag && (
           <>
             {mode === "server" && (
               <Space direction="vertical" style={{ width: "100%" }} align="center">
@@ -266,13 +323,17 @@ const NfcBindModal: React.FC<NfcBindModalProps> = ({ spool, visible, onClose, on
         )}
 
         {/* Step 2: Confirm binding */}
-        {scannedTagData && (
+        {hasScannedTag && (
           <Space direction="vertical" style={{ width: "100%" }} size="middle">
             <Alert type="info" message={t("nfc.bind_confirm_description")} showIcon />
-            <TagDataSummary tagData={scannedTagData} t={t} />
+            {scannedQidiData ? (
+              <QidiTagDataSummary qidiData={scannedQidiData} t={t} />
+            ) : scannedTagData ? (
+              <TagDataSummary tagData={scannedTagData} t={t} />
+            ) : null}
 
             <Space style={{ width: "100%", justifyContent: "center" }}>
-              <Button onClick={() => { setScannedTagData(null); setScannedRawB64(null); bindMutation.reset(); }}>
+              <Button onClick={resetState}>
                 {t("nfc.bind_scan_again")}
               </Button>
               <Button
