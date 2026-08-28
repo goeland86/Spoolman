@@ -19,6 +19,7 @@ from .._openprinttag_fixtures import (
     MF_PRIMARY_COLOR,
     build_openprinttag,
 )
+from .._qidi_fixtures import build_qidi
 from .._tigertag_fixtures import build_tigertag
 from ..conftest import URL, assert_httpx_success
 
@@ -173,3 +174,52 @@ def test_create_true_on_an_unmatched_tigertag_creates_and_links_a_spool_without_
         assert body["spool"]["filament"]["color_hex"] == "112233"
     finally:
         _delete_created_spool(body["spool"])
+
+
+def test_create_true_on_an_unmatched_qidi_tag_creates_and_links_a_spool():
+    uid = _uid()
+    payload = base64.b64encode(build_qidi(material_code=1, color_code=18)).decode("ascii")
+
+    result = httpx.post(
+        f"{URL}/api/v1/tag/scan",
+        json={
+            "uid": uid,
+            "reader_id": _reader_id(),
+            "format": "qidi",
+            "payload_b64": payload,
+            "create": True,
+        },
+    )
+    assert_httpx_success(result)
+    body = result.json()
+    try:
+        assert body["created"] is True
+        assert body["spool"]["filament"]["material"] == "PLA"
+        assert body["spool"]["filament"]["vendor"]["name"] == "Qidi"
+        assert body["spool"]["filament"]["color_hex"] == "FF362D"
+        # Not on the tag -- falls back to the OpenPrintTag/TigerTag defaults.
+        assert body["spool"]["filament"]["diameter"] == 1.75
+        assert body["spool"]["filament"]["density"] == 1.24
+    finally:
+        _delete_created_spool(body["spool"])
+
+
+def test_create_true_on_a_qidi_block_from_a_different_manufacturer_creates_nothing():
+    uid = _uid()
+    payload = base64.b64encode(build_qidi(material_code=1, color_code=1, manufacturer_code=2)).decode("ascii")
+
+    result = httpx.post(
+        f"{URL}/api/v1/tag/scan",
+        json={
+            "uid": uid,
+            "reader_id": _reader_id(),
+            "format": "qidi",
+            "payload_b64": payload,
+            "create": True,
+        },
+    )
+    assert_httpx_success(result)
+
+    body = result.json()
+    assert body["created"] is False
+    assert body["matched_spool_id"] is None
