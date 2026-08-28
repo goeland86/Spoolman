@@ -27,6 +27,7 @@ from spoolman.tags.openprinttag import (
     MF_PRIMARY_COLOR,
     uuid5_bytes,
 )
+from spoolman.tags.qidi import QidiTagData, encode_qidi_block
 from spoolman.tags.tigertag import TIGERTAG_INIT, TIGERTAG_MAKER_V1, TigerTagData
 from tests.test_tigertag_codec import encode_ntag213
 
@@ -189,6 +190,43 @@ def test_decode_tigertag_non_gram_unit_is_none_not_a_scaled_value() -> None:
     result = decode("tigertag", raw)
     assert result is not None
     assert result.weight is None
+
+
+def test_decode_dispatches_qidi() -> None:
+    raw = encode_qidi_block(QidiTagData(material_code=1, color_code=18, manufacturer_code=1))
+    result = decode("qidi", raw)
+
+    assert result == DecodedTag(
+        material_class="FFF",
+        material="PLA",
+        name="PLA",
+        vendor_name="Qidi",
+        color_hex="FF362D",
+        diameter=None,
+        density=None,
+        weight=None,
+        spool_weight=None,
+        used_weight=None,
+        instance_uuid=None,
+    )
+
+
+def test_decode_qidi_rejects_wrong_manufacturer() -> None:
+    raw = encode_qidi_block(QidiTagData(material_code=1, color_code=1, manufacturer_code=2))
+    assert decode("qidi", raw) is None
+
+
+def test_decode_qidi_unparseable_payload_returns_none() -> None:
+    assert decode("qidi", b"short") is None
+
+
+def test_decode_qidi_gap_in_material_table_is_none_not_unknown_string() -> None:
+    """Code 9 has no entry in MATERIAL_CODE_MAP -- must surface as None, not "Unknown (9)"."""
+    raw = encode_qidi_block(QidiTagData(material_code=9, color_code=1, manufacturer_code=1))
+    result = decode("qidi", raw)
+    assert result is not None
+    assert result.material is None
+    assert result.name is None
 
 
 # --- density fallback --------------------------------------------------------------
