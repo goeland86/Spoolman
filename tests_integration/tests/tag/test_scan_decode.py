@@ -22,6 +22,7 @@ from .._openprinttag_fixtures import (
     REAL_PRUSA_TEST01_TAG_UID_HEX,
     build_openprinttag,
 )
+from .._qidi_fixtures import build_qidi
 from .._tigertag_fixtures import TIGERTAG_INIT, build_tigertag
 from ..conftest import URL, assert_httpx_success
 
@@ -196,6 +197,35 @@ def test_scan_with_a_blank_tigertag_has_no_decoded_field():
     result = httpx.post(
         f"{URL}/api/v1/tag/scan",
         json={"uid": _uid(), "reader_id": _reader_id(), "format": "tigertag", "payload_b64": payload},
+    )
+    assert_httpx_success(result)
+    assert "decoded" not in result.json()
+
+
+def test_scan_decodes_a_qidi_tag():
+    payload = base64.b64encode(build_qidi(material_code=1, color_code=18)).decode("ascii")
+    result = httpx.post(
+        f"{URL}/api/v1/tag/scan",
+        json={"uid": _uid(), "reader_id": _reader_id(), "format": "qidi", "payload_b64": payload},
+    )
+    assert_httpx_success(result)
+
+    decoded = result.json()["decoded"]
+    assert decoded["material"] == "PLA"
+    assert decoded["name"] == "PLA"
+    assert decoded["vendor_name"] == "Qidi"
+    assert decoded["color_hex"] == "FF362D"
+    assert decoded["material_class"] == "FFF"
+    # Qidi's tag only ever stores material + color + manufacturer -- no weight/diameter.
+    assert decoded.get("weight") is None
+    assert decoded.get("diameter") is None
+
+
+def test_scan_with_a_qidi_block_from_a_different_manufacturer_has_no_decoded_field():
+    payload = base64.b64encode(build_qidi(material_code=1, color_code=1, manufacturer_code=2)).decode("ascii")
+    result = httpx.post(
+        f"{URL}/api/v1/tag/scan",
+        json={"uid": _uid(), "reader_id": _reader_id(), "format": "qidi", "payload_b64": payload},
     )
     assert_httpx_success(result)
     assert "decoded" not in result.json()

@@ -2,7 +2,7 @@
 
 import pytest
 
-from spoolman.qidi_codec import (
+from spoolman.tags.qidi import (
     MIFARE_BLOCK_SIZE,
     QidiTagData,
     color_code_from_hex,
