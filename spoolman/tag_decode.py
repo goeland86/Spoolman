@@ -3,8 +3,8 @@
 `POST /tag/scan` (spoolman/api/v1/tag.py) accepts a `format` and a raw `payload_b64` but,
 on its own, never looks inside them -- that split is deliberate (see spoolman/tags.py): the
 scan-relay layer only ever needs a UID. This module is where "Spoolman owns the codec" gets
-exercised: format-specific decoding lives in its own codec module (openprinttag_codec.py and,
-as later PRs add them, tigertag_codec.py / qidi_codec.py), and `decode()` is the one place
+exercised: format-specific decoding lives in its own codec module (openprinttag_codec.py,
+tigertag_codec.py and, as a later PR adds it, qidi_codec.py), and `decode()` is the one place
 that knows which codec answers for which format string.
 
 Decoding is best-effort and pure: no database, no FastAPI, mirrors tags.py in that regard.
@@ -15,7 +15,7 @@ a scan's core contract (resolve a UID) must never fail because enrichment of it 
 import logging
 from dataclasses import dataclass
 
-from spoolman import openprinttag_codec
+from spoolman import openprinttag_codec, tigertag_codec
 from spoolman.tags import normalize_format
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,8 @@ def decode(tag_format: str | None, payload: bytes, uid_bytes: bytes | None = Non
     fmt = normalize_format(tag_format)
     if fmt == "openprinttag":
         return _decode_openprinttag(payload, uid_bytes)
+    if fmt == "tigertag":
+        return _decode_tigertag(payload)
     return None
 
 
@@ -119,4 +121,27 @@ def _decode_openprinttag(payload: bytes, uid_bytes: bytes | None) -> DecodedTag 
         empty_container_weight_g=data.empty_container_weight,
         consumed_weight_g=data.consumed_weight,
         external_id=data.effective_instance_uuid,
+    )
+
+
+def _decode_tigertag(payload: bytes) -> DecodedTag | None:
+    try:
+        data = tigertag_codec.decode_ntag213(payload)
+    except ValueError:
+        logger.debug("Could not decode payload as TigerTag", exc_info=True)
+        return None
+
+    if not tigertag_codec.is_tigertag(data.id_tigertag):
+        # Wrong magic number -- either not a TigerTag at all, or a blank/Init tag with
+        # nothing written to it yet. Either way there's nothing usable to surface.
+        return None
+
+    # id_material/id_brand are TigerTag's own catalog IDs, not names -- resolving them
+    # needs the optional external-DB addon (a separate, off-by-default PR), so material_type/
+    # material_name/brand_name stay unset here rather than surfacing a bare number. Likewise
+    # id_product is a catalog SKU, not a per-roll identifier, so it's not a safe external_id.
+    return DecodedTag(
+        color_hex=data.color_hex,
+        diameter_mm=data.diameter_mm or None,
+        net_weight_g=float(data.weight) or None,
     )
