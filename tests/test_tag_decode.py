@@ -22,6 +22,7 @@ from spoolman.tag_decode import (
     decode,
     density_or_fallback,
 )
+from spoolman.tigertag_codec import TIGERTAG_INIT, TIGERTAG_MAKER_V1, TigerTagData, encode_ntag213
 
 
 def _cbor_payload(main: dict, aux: dict | None = None) -> bytes:
@@ -117,6 +118,62 @@ def test_decode_derives_external_id_from_uid_when_tag_has_no_instance_uuid() -> 
     assert without_uid.external_id is None
     assert with_uid is not None
     assert with_uid.external_id == str(uuid.uuid5(uuid.UUID("31062f81-b5bd-4f86-a5f8-46367e841508"), uid_bytes))
+
+
+def test_decode_dispatches_tigertag() -> None:
+    raw = encode_ntag213(
+        TigerTagData(
+            id_tigertag=TIGERTAG_MAKER_V1,
+            id_diameter=1,
+            weight=1000,
+            color_r=0x11,
+            color_g=0x22,
+            color_b=0x33,
+        ),
+    )
+    result = decode("tigertag", raw)
+
+    assert result == DecodedTag(
+        material_type=None,
+        material_name=None,
+        brand_name=None,
+        color_hex="112233",
+        diameter_mm=1.75,
+        density_g_cm3=None,
+        net_weight_g=1000.0,
+        empty_container_weight_g=None,
+        consumed_weight_g=None,
+        external_id=None,
+    )
+
+
+def test_decode_tigertag_rejects_blank_init_tag() -> None:
+    """TIGERTAG_INIT marks an uninitialized tag -- nothing usable to surface."""
+    raw = encode_ntag213(TigerTagData(id_tigertag=TIGERTAG_INIT))
+    assert decode("tigertag", raw) is None
+
+
+def test_decode_tigertag_rejects_junk_magic() -> None:
+    raw = encode_ntag213(TigerTagData(id_tigertag=0xDEADBEEF))
+    assert decode("tigertag", raw) is None
+
+
+def test_decode_tigertag_unparseable_payload_returns_none() -> None:
+    assert decode("tigertag", b"too short") is None
+
+
+def test_decode_tigertag_unknown_diameter_is_none_not_zero() -> None:
+    raw = encode_ntag213(TigerTagData(id_tigertag=TIGERTAG_MAKER_V1, id_diameter=99))
+    result = decode("tigertag", raw)
+    assert result is not None
+    assert result.diameter_mm is None
+
+
+def test_decode_tigertag_zero_weight_is_none() -> None:
+    raw = encode_ntag213(TigerTagData(id_tigertag=TIGERTAG_MAKER_V1, weight=0))
+    result = decode("tigertag", raw)
+    assert result is not None
+    assert result.net_weight_g is None
 
 
 # --- density fallback --------------------------------------------------------------

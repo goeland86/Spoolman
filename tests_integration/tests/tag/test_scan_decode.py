@@ -19,6 +19,7 @@ from .._openprinttag_fixtures import (
     MF_PRIMARY_COLOR,
     build_openprinttag,
 )
+from .._tigertag_fixtures import TIGERTAG_INIT, build_tigertag
 from ..conftest import URL, assert_httpx_success
 
 
@@ -108,3 +109,31 @@ def test_scan_decodes_even_when_the_tag_is_already_matched(random_filament: dict
         assert body["created"] is False
     finally:
         httpx.delete(f"{URL}/api/v1/spool/{spool['id']}")
+
+
+def test_scan_decodes_a_tigertag():
+    payload = base64.b64encode(build_tigertag(id_diameter=1, weight=1000, color_hex="112233")).decode("ascii")
+    result = httpx.post(
+        f"{URL}/api/v1/tag/scan",
+        json={"uid": _uid(), "reader_id": _reader_id(), "format": "tigertag", "payload_b64": payload},
+    )
+    assert_httpx_success(result)
+
+    decoded = result.json()["decoded"]
+    assert decoded["color_hex"] == "112233"
+    assert decoded["diameter_mm"] == 1.75
+    assert decoded["net_weight_g"] == 1000.0
+    # id_material/id_brand need the optional external-DB addon to resolve to names.
+    assert decoded["material_type"] is None
+    assert decoded["brand_name"] is None
+
+
+def test_scan_with_a_blank_tigertag_has_no_decoded_field():
+    """TIGERTAG_INIT marks an uninitialized tag -- nothing usable to surface."""
+    payload = base64.b64encode(build_tigertag(id_tigertag=TIGERTAG_INIT)).decode("ascii")
+    result = httpx.post(
+        f"{URL}/api/v1/tag/scan",
+        json={"uid": _uid(), "reader_id": _reader_id(), "format": "tigertag", "payload_b64": payload},
+    )
+    assert_httpx_success(result)
+    assert "decoded" not in result.json()
