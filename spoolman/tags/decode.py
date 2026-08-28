@@ -113,6 +113,8 @@ def decode(tag_format: str | None, payload: bytes, uid_bytes: bytes | None = Non
             return _decode_openprinttag(payload, uid_bytes)
         if fmt == "tigertag":
             return _decode_tigertag(payload)
+        if fmt == "qidi":
+            return _decode_qidi(payload)
     except Exception:  # noqa: BLE001 -- best effort by contract, see the module docstring
         logger.warning("Could not decode %s payload", fmt, exc_info=True)
     return None
@@ -180,4 +182,34 @@ def _decode_tigertag(payload: bytes) -> DecodedTag | None:
         color_hex=data.color_hex,
         diameter=data.diameter_mm or None,
         weight=float(data.weight) or None,
+    )
+
+
+def _decode_qidi(payload: bytes) -> DecodedTag | None:
+    # Imported here for the same reason as the other formats above.
+    from spoolman.tags import qidi as qidi_codec  # noqa: PLC0415
+
+    if not qidi_codec.is_valid_qidi_block(payload):
+        # Covers both "too short to be a block" and "doesn't look like Qidi data" --
+        # decode_qidi_block itself only checks length, so validity is checked separately.
+        return None
+
+    data = qidi_codec.decode_qidi_block(payload)
+
+    # Unlike TigerTag, Qidi's material/color codes resolve to names from static tables baked
+    # into the codec itself -- no external DB needed. A code outside the mapped ranges (already
+    # excluded by is_valid_qidi_block's bounds check) can't happen here, but the property still
+    # falls back to an "Unknown (n)" string rather than a real name, so guard on map membership.
+    material_known = data.material_code in qidi_codec.MATERIAL_CODE_MAP
+    color_known = data.color_code in qidi_codec.COLOR_CODE_MAP
+
+    # Qidi (like TigerTag) only ever tags filament spools -- no resin variant of this format.
+    return DecodedTag(
+        material_class="FFF",
+        material=data.material_type if material_known else None,
+        name=data.material_name if material_known else None,
+        # manufacturer_code == 1 is Qidi's own code for itself -- already required by
+        # is_valid_qidi_block, so a decoded block always means a Qidi-branded tag.
+        vendor_name="Qidi",
+        color_hex=data.color_hex if color_known else None,
     )
