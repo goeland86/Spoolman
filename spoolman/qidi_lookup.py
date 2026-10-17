@@ -18,6 +18,7 @@ from spoolman.database import filament as filament_db
 from spoolman.database import spool as spool_db
 from spoolman.database import vendor as vendor_db
 from spoolman.database.models import Filament, Spool, SpoolField
+from spoolman.nfc_tag_field import field_values, to_field_value
 from spoolman.qidi_codec import (
     MATERIAL_CODE_MAP,
     QidiTagData,
@@ -51,12 +52,12 @@ async def bind_spool_to_qidi_tag(db: AsyncSession, spool: Spool, tag_uid_hex: st
 
     for field in spool.extra:
         if field.key == "nfc_tag_id":
-            if field.value == nfc_tag_id:
+            if field.value in field_values(nfc_tag_id):
                 return False  # Already bound to this tag
             logger.debug("Spool %d already bound to %s, not rebinding to %s", spool.id, field.value, nfc_tag_id)
             return False
 
-    db.add(SpoolField(spool_id=spool.id, key="nfc_tag_id", value=nfc_tag_id))
+    db.add(SpoolField(spool_id=spool.id, key="nfc_tag_id", value=to_field_value(nfc_tag_id)))
     await db.flush()
     logger.info("Bound spool %d to Qidi tag %s", spool.id, nfc_tag_id)
     return True
@@ -97,7 +98,7 @@ async def find_spool_by_qidi_tag(
                 selectinload(Spool.extra),
             )
             .where(SpoolField.key == "nfc_tag_id")
-            .where(SpoolField.value == nfc_tag_id)
+            .where(SpoolField.value.in_(field_values(nfc_tag_id)))
             .limit(1)
         )
         result = await db.execute(stmt)
@@ -207,7 +208,7 @@ async def create_spool_from_qidi_tag(
     # Bind tag UID to spool
     if tag_uid_hex:
         nfc_tag_id = _make_nfc_tag_id(tag_uid_hex)
-        db.add(SpoolField(spool_id=db_spool.id, key="nfc_tag_id", value=nfc_tag_id))
+        db.add(SpoolField(spool_id=db_spool.id, key="nfc_tag_id", value=to_field_value(nfc_tag_id)))
         await db.flush()
         logger.info("Bound new spool %d to Qidi tag %s", db_spool.id, nfc_tag_id)
 

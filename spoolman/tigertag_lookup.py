@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from spoolman.database.models import Filament, Spool, SpoolField, Vendor
+from spoolman.nfc_tag_field import field_values, to_field_value
 from spoolman.tigertag_codec import TigerTagData
 
 logger = logging.getLogger(__name__)
@@ -49,14 +50,14 @@ async def bind_spool_to_tigertag(db: AsyncSession, spool: Spool, tag_data: Tiger
     # Check if this spool already has a nfc_tag_id binding
     for field in spool.extra:
         if field.key == "nfc_tag_id":
-            if field.value == nfc_tag_id:
+            if field.value in field_values(nfc_tag_id):
                 return False  # Already bound to this tag
             # Spool is bound to a different tag — don't overwrite
             logger.debug("Spool %d already bound to %s, not rebinding to %s", spool.id, field.value, nfc_tag_id)
             return False
 
     # Create the binding
-    db.add(SpoolField(spool_id=spool.id, key="nfc_tag_id", value=nfc_tag_id))
+    db.add(SpoolField(spool_id=spool.id, key="nfc_tag_id", value=to_field_value(nfc_tag_id)))
     await db.flush()
     logger.info("Bound spool %d to TigerTag %s", spool.id, nfc_tag_id)
     return True
@@ -98,7 +99,7 @@ async def find_spool_by_tigertag(
                 .join(Spool.extra)
                 .options(selectinload(Spool.filament).selectinload(Filament.vendor))
                 .where(SpoolField.key == "nfc_tag_id")
-                .where(SpoolField.value == nfc_tag_id)
+                .where(SpoolField.value.in_(field_values(nfc_tag_id)))
                 .limit(1)
             )
             result = await db.execute(stmt)

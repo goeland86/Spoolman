@@ -16,6 +16,7 @@ from spoolman.database import vendor as vendor_db
 from spoolman.database.database import get_db_session
 from spoolman.database.models import Filament, Vendor
 from spoolman.env import is_nfc_enabled
+from spoolman.nfc_tag_field import field_values, to_field_value
 
 router = APIRouter(
     prefix="/nfc",
@@ -535,7 +536,7 @@ async def _create_spool_from_tigertag(
     # Bind the TigerTag to the spool
     nfc_tag_id = _make_nfc_tag_id(tag_data)
     if nfc_tag_id:
-        db.add(SpoolField(spool_id=db_spool.id, key="nfc_tag_id", value=nfc_tag_id))
+        db.add(SpoolField(spool_id=db_spool.id, key="nfc_tag_id", value=to_field_value(nfc_tag_id)))
         await db.flush()
         logger.info("Bound new spool %d to TigerTag %s", db_spool.id, nfc_tag_id)
 
@@ -873,7 +874,8 @@ async def _bind_tigertag(db: AsyncSession, spool, request: NfcBindRequest) -> Nf
     existing_stmt = (
         select(SpoolField)
         .where(SpoolField.key == "nfc_tag_id")
-        .where(SpoolField.value == nfc_tag_id)
+        .where(SpoolField.value.in_(field_values(nfc_tag_id)))
+        .limit(1)
     )
     existing_result = await db.execute(existing_stmt)
     existing_binding = existing_result.scalar_one_or_none()
@@ -916,7 +918,8 @@ async def _bind_qidi(db: AsyncSession, spool, request: NfcBindRequest) -> NfcBin
     existing_stmt = (
         select(SpoolField)
         .where(SpoolField.key == "nfc_tag_id")
-        .where(SpoolField.value == nfc_tag_id)
+        .where(SpoolField.value.in_(field_values(nfc_tag_id)))
+        .limit(1)
     )
     existing_result = await db.execute(existing_stmt)
     existing_binding = existing_result.scalar_one_or_none()
