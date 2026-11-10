@@ -108,6 +108,17 @@ def test_is_valid_qidi_block_false_when_color_out_of_range() -> None:
     assert not is_valid_qidi_block(raw)
 
 
+def test_is_valid_qidi_block_true_at_the_top_of_each_range() -> None:
+    """50 and 24 are the real spec's highest defined codes, not rounded-up guesses.
+
+    Cross-checked 2026-11-10 against two independent open-source Qidi readers
+    (LexyGuru/Qidi_RFID_App, n0cloud/qidi-box-rfid-manager) and SimplyPrint's own Qidi
+    material-standard doc -- all three agree on 1-50/1-24 and on every code in between.
+    """
+    raw = bytes([50, 24, 1]) + bytes(13)
+    assert is_valid_qidi_block(raw)
+
+
 def test_is_valid_qidi_block_false_when_manufacturer_not_one() -> None:
     raw = bytes([5, 18, 2]) + bytes(13)
     assert not is_valid_qidi_block(raw)
